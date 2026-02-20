@@ -21,7 +21,6 @@ const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
     fileFilter: (req, file, cb) => {
-        // Tipos permitidos
         const allowed = [
             'image/jpeg', 'image/png', 'image/gif', 'image/webp',
             'application/pdf',
@@ -43,7 +42,7 @@ const upload = multer({
 });
 
 // ============================================
-// CORS — IMPORTANTE: configurar correctamente
+// CORS
 // ============================================
 const corsOptions = {
     origin: function (origin, callback) {
@@ -60,12 +59,12 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions)); // preflight
+app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // ============================================
-// HEALTH CHECK — siempre devuelve JSON
+// HEALTH CHECK
 // ============================================
 app.get('/api/health', (req, res) => {
     res.json({ ok: true, timestamp: new Date().toISOString() });
@@ -99,7 +98,7 @@ function adminGuard(req, res, next) {
 }
 
 // ============================================
-// HELPER: registrar historial
+// HELPERS
 // ============================================
 async function registrarHistorial(ticketId, userId, tipo, descripcion, datos = {}) {
     const { error } = await supabaseAdmin.from('ticket_historial').insert({
@@ -112,26 +111,22 @@ async function registrarHistorial(ticketId, userId, tipo, descripcion, datos = {
     if (error) console.error('Error registrando historial:', error.message);
 }
 
-// ============================================
-// HELPER: calcular horas transcurridas
-// Congela el tiempo si el ticket está Completado o Facturado
-// ============================================
 function calcularHorasTranscurridas(ticket) {
     if (!ticket.created_at) return 0;
-
-    // Si está completado o facturado, el tiempo se congela en el momento de cierre
     let fechaFin;
     if (ticket.estado === 'Facturado' && ticket.invoiced_at) {
         fechaFin = new Date(ticket.invoiced_at);
     } else if (ticket.estado === 'Completado' && ticket.completed_at) {
         fechaFin = new Date(ticket.completed_at);
     } else {
-        fechaFin = new Date(); // sigue corriendo
+        fechaFin = new Date();
     }
-
     const ms = fechaFin - new Date(ticket.created_at);
-    return Math.max(0, Math.round(ms / 360000) / 10); // redondear a 1 decimal
+    return Math.max(0, Math.round(ms / 360000) / 10);
 }
+
+const STORAGE_BUCKET      = process.env.STORAGE_BUCKET      || 'ticket-archivos';
+const CHAT_STORAGE_BUCKET = process.env.CHAT_STORAGE_BUCKET || 'chat-archivos';
 
 // ============================================
 // AUTH
@@ -163,35 +158,26 @@ app.get('/api/usuarios', authGuard, adminGuard, async (req, res) => {
 
 app.post('/api/usuarios', authGuard, adminGuard, async (req, res) => {
     const { nombre, email, rol, password } = req.body;
-
     if (!nombre || !email || !rol || !password) {
         return res.status(400).json({ error: 'Nombre, email, rol y contraseña son obligatorios.' });
     }
-
     const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
         email: email.toLowerCase().trim(),
         password,
         email_confirm: true,
         user_metadata: { nombre, rol },
     });
-
     if (authError) {
         if (authError.message.includes('already registered')) {
             return res.status(409).json({ error: 'Ya existe un usuario con ese email.' });
         }
         return res.status(500).json({ error: authError.message });
     }
-
     await supabaseAdmin.from('profiles').upsert(
         { id: authData.user.id, nombre, rol },
         { onConflict: 'id' }
     );
-
-    res.status(201).json({
-        id: authData.user.id,
-        email: authData.user.email,
-        nombre, rol, activo: true,
-    });
+    res.status(201).json({ id: authData.user.id, email: authData.user.email, nombre, rol, activo: true });
 });
 
 app.put('/api/usuarios/:id', authGuard, adminGuard, async (req, res) => {
@@ -278,7 +264,7 @@ app.delete('/api/dispositivos/:id', authGuard, async (req, res) => {
 });
 
 // ============================================
-// TICKETS V1 (legacy — panel principal)
+// TICKETS V1 (legacy)
 // ============================================
 app.get('/api/tickets', authGuard, async (req, res) => {
     const { data, error } = await supabaseAdmin
@@ -290,7 +276,6 @@ app.get('/api/tickets', authGuard, async (req, res) => {
     res.json(data);
 });
 
-// POST legacy (redirige a v2)
 app.post('/api/tickets', authGuard, async (req, res) => {
     const { empresa_id, asunto, descripcion, prioridad, estado } = req.body;
     if (!empresa_id || !asunto) return res.status(400).json({ error: 'empresa_id y asunto son obligatorios.' });
@@ -362,7 +347,6 @@ app.get('/api/v2/tickets', authGuard, async (req, res) => {
     const { data, error } = await query;
     if (error) return res.status(500).json({ error: error.message });
 
-    // Resolver nombres de operarios
     const userIds = new Set();
     data.forEach(t => t.ticket_asignaciones?.forEach(a => userIds.add(a.user_id)));
 
@@ -379,16 +363,13 @@ app.get('/api/v2/tickets', authGuard, async (req, res) => {
             ...a,
             profiles: { id: a.user_id, nombre: profileMap[a.user_id] || '?' },
         })),
-        // ✅ FIX: tiempo congelado al completar/facturar
         horas_transcurridas: calcularHorasTranscurridas(t),
     }));
 
-    // Filtrar por operario si se especifica
     if (operario_id) {
         result = result.filter(t => t.ticket_asignaciones?.some(a => a.user_id === operario_id));
     }
 
-    // Búsqueda
     if (search) {
         const s = search.toLowerCase();
         result = result.filter(t =>
@@ -418,7 +399,6 @@ app.get('/api/v2/tickets/:id', authGuard, async (req, res) => {
 
     if (error) return res.status(404).json({ error: 'Ticket no encontrado' });
 
-    // Resolver nombres
     const userIds = new Set();
     data.ticket_asignaciones?.forEach(a => userIds.add(a.user_id));
     data.ticket_historial?.forEach(h => { if (h.user_id) userIds.add(h.user_id); });
@@ -453,7 +433,6 @@ app.get('/api/v2/tickets/:id', authGuard, async (req, res) => {
         }));
     }
 
-    // ✅ FIX: tiempo congelado al completar/facturar
     data.horas_transcurridas = calcularHorasTranscurridas(data);
     data.horas_totales = (data.ticket_horas || []).reduce((s, h) => s + Number(h.horas), 0);
 
@@ -487,22 +466,14 @@ app.post('/api/v2/tickets', authGuard, async (req, res) => {
         `Ticket #${ticket.numero} creado por ${req.user.nombre || req.user.email}`
     );
 
-    // Asignar operarios y registrar en historial
     if (operarios?.length) {
         await supabaseAdmin.from('ticket_asignaciones').insert(
             operarios.map(uid => ({ ticket_id: ticket.id, user_id: uid, asignado_by: req.user.id }))
         );
-
-        // Obtener nombres para el historial
         const { data: perfiles } = await supabaseAdmin
             .from('profiles').select('id, nombre').in('id', operarios);
         const nombres = perfiles?.map(p => p.nombre).join(', ') || operarios.join(', ');
-
-        await registrarHistorial(
-            ticket.id, req.user.id, 'asignacion',
-            `Asignado a: ${nombres}`,
-            { operarios }
-        );
+        await registrarHistorial(ticket.id, req.user.id, 'asignacion', `Asignado a: ${nombres}`, { operarios });
     }
 
     res.status(201).json(ticket);
@@ -523,11 +494,9 @@ app.put('/api/v2/tickets/:id', authGuard, async (req, res) => {
 
     if (estado && estado !== old.estado) {
         updates.estado = estado;
-        // ✅ FIX: timestamps para congelar el tiempo
         if (estado === 'En curso'   && !old.started_at)   updates.started_at   = new Date().toISOString();
         if (estado === 'Completado' && !old.completed_at) updates.completed_at = new Date().toISOString();
         if (estado === 'Facturado'  && !old.invoiced_at)  updates.invoiced_at  = new Date().toISOString();
-
         await registrarHistorial(
             req.params.id, req.user.id, 'estado',
             `Estado cambiado: "${old.estado}" → "${estado}"`,
@@ -557,7 +526,6 @@ app.delete('/api/v2/tickets/:id', authGuard, adminGuard, async (req, res) => {
 
 // ============================================
 // TICKETS V2 — ASIGNACIONES
-// ✅ FIX: registrar en historial al asignar/desasignar
 // ============================================
 app.post('/api/v2/tickets/:id/asignaciones', authGuard, async (req, res) => {
     const { operarios } = req.body;
@@ -567,30 +535,23 @@ app.post('/api/v2/tickets/:id/asignaciones', authGuard, async (req, res) => {
 
     const ticketId = req.params.id;
 
-    // Obtener asignaciones actuales para detectar nuevas
     const { data: existentes } = await supabaseAdmin
-        .from('ticket_asignaciones')
-        .select('user_id')
-        .eq('ticket_id', ticketId);
+        .from('ticket_asignaciones').select('user_id').eq('ticket_id', ticketId);
     const existentesIds = new Set((existentes || []).map(a => a.user_id));
     const nuevos = operarios.filter(id => !existentesIds.has(id));
 
-    // Upsert
     const { error: upsertError } = await supabaseAdmin
         .from('ticket_asignaciones')
         .upsert(
             operarios.map(uid => ({ ticket_id: ticketId, user_id: uid, asignado_by: req.user.id })),
             { onConflict: 'ticket_id,user_id' }
         );
-
     if (upsertError) return res.status(500).json({ error: upsertError.message });
 
-    // ✅ Registrar en historial solo los nuevos
     if (nuevos.length > 0) {
         const { data: perfiles } = await supabaseAdmin
             .from('profiles').select('id, nombre').in('id', nuevos);
         const nombres = perfiles?.map(p => p.nombre).join(', ') || nuevos.join(', ');
-
         await registrarHistorial(
             ticketId, req.user.id, 'asignacion',
             `${req.user.nombre || req.user.email} asignó a: ${nombres}`,
@@ -598,13 +559,11 @@ app.post('/api/v2/tickets/:id/asignaciones', authGuard, async (req, res) => {
         );
     }
 
-    // Leer resultado
     const { data, error } = await supabaseAdmin
         .from('ticket_asignaciones')
         .select('id, ticket_id, user_id, asignado_at')
         .eq('ticket_id', ticketId)
         .in('user_id', operarios);
-
     if (error) return res.status(500).json({ error: error.message });
 
     const { data: perfiles } = await supabaseAdmin
@@ -619,7 +578,6 @@ app.post('/api/v2/tickets/:id/asignaciones', authGuard, async (req, res) => {
 });
 
 app.delete('/api/v2/tickets/:id/asignaciones/:userId', authGuard, async (req, res) => {
-    // ✅ Registrar desasignación en historial
     const { data: perfil } = await supabaseAdmin
         .from('profiles').select('nombre').eq('id', req.params.userId).single();
     const nombre = perfil?.nombre || req.params.userId;
@@ -629,7 +587,6 @@ app.delete('/api/v2/tickets/:id/asignaciones/:userId', authGuard, async (req, re
         .delete()
         .eq('ticket_id', req.params.id)
         .eq('user_id', req.params.userId);
-
     if (error) return res.status(500).json({ error: error.message });
 
     await registrarHistorial(
@@ -637,12 +594,11 @@ app.delete('/api/v2/tickets/:id/asignaciones/:userId', authGuard, async (req, re
         `${req.user.nombre || req.user.email} quitó a ${nombre} del ticket`,
         { operario_id: req.params.userId, nombre }
     );
-
     res.json({ ok: true });
 });
 
 // ============================================
-// TICKETS V2 — NOTAS (bloc de notas)
+// TICKETS V2 — NOTAS
 // ============================================
 app.put('/api/v2/tickets/:id/notas', authGuard, async (req, res) => {
     const { notas } = req.body;
@@ -657,14 +613,13 @@ app.put('/api/v2/tickets/:id/notas', authGuard, async (req, res) => {
 });
 
 // ============================================
-// TICKETS V2 — NOTAS INTERNAS (chat equipo)
+// TICKETS V2 — NOTAS INTERNAS (legacy, se mantiene por compatibilidad)
 // ============================================
 app.post('/api/v2/tickets/:id/notas-internas', authGuard, async (req, res) => {
     const { texto } = req.body;
     if (!texto?.trim()) {
         return res.status(400).json({ error: 'El texto no puede estar vacío.' });
     }
-
     const { data, error } = await supabaseAdmin
         .from('ticket_historial')
         .insert({
@@ -676,9 +631,7 @@ app.post('/api/v2/tickets/:id/notas-internas', authGuard, async (req, res) => {
         })
         .select('id, tipo, descripcion, created_at, user_id')
         .single();
-
     if (error) return res.status(500).json({ error: error.message });
-
     res.status(201).json({
         ...data,
         profiles: { id: req.user.id, nombre: req.user.nombre || req.user.email },
@@ -686,31 +639,175 @@ app.post('/api/v2/tickets/:id/notas-internas', authGuard, async (req, res) => {
 });
 
 // ============================================
-// TICKETS V2 — ARCHIVOS
-// ✅ FIX: bucket name consistente, mejor manejo de errores
+// TICKETS V2 — COMENTARIOS
+// Tabla requerida: ticket_comentarios
+//   id, ticket_id, user_id, contenido, editado (bool), created_at, updated_at
+// Tabla requerida: ticket_comentarios_archivos
+//   id, comentario_id, nombre_original, storage_path, mime_type, tamanio, subido_by, created_at
 // ============================================
-const STORAGE_BUCKET = process.env.STORAGE_BUCKET || 'ticket-archivos';
+app.get('/api/v2/tickets/:id/comentarios', authGuard, async (req, res) => {
+    const { data, error } = await supabaseAdmin
+        .from('ticket_comentarios')
+        .select(`
+            id, contenido, editado, created_at, updated_at, user_id,
+            ticket_comentarios_archivos(id, nombre_original, mime_type, tamanio, created_at)
+        `)
+        .eq('ticket_id', req.params.id)
+        .order('created_at', { ascending: true });
 
+    if (error) return res.status(500).json({ error: error.message });
+
+    const userIds = [...new Set(data.map(c => c.user_id))];
+    let profileMap = {};
+    if (userIds.length) {
+        const { data: perfiles } = await supabaseAdmin
+            .from('profiles').select('id, nombre').in('id', userIds);
+        perfiles?.forEach(p => { profileMap[p.id] = p.nombre; });
+    }
+
+    res.json(data.map(c => ({
+        ...c,
+        profiles: { id: c.user_id, nombre: profileMap[c.user_id] || '?' },
+    })));
+});
+
+app.post('/api/v2/tickets/:id/comentarios', authGuard, (req, res, next) => {
+    upload.array('files', 10)(req, res, (err) => {
+        if (err instanceof multer.MulterError) {
+            if (err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: 'Archivo supera el límite de 50MB.' });
+            return res.status(400).json({ error: err.message });
+        }
+        if (err) return res.status(400).json({ error: err.message });
+        next();
+    });
+}, async (req, res) => {
+    const contenido = req.body.contenido?.trim() || '';
+    const files     = req.files || [];
+
+    if (!contenido && !files.length) {
+        return res.status(400).json({ error: 'El comentario debe tener texto o archivos.' });
+    }
+
+    // Verificar ticket
+    const { data: ticket } = await supabaseAdmin
+        .from('tickets_v2').select('id').eq('id', req.params.id).single();
+    if (!ticket) return res.status(404).json({ error: 'Ticket no encontrado.' });
+
+    // Crear comentario
+    const { data: comentario, error: comentarioError } = await supabaseAdmin
+        .from('ticket_comentarios')
+        .insert({
+            ticket_id: req.params.id,
+            user_id:   req.user.id,
+            contenido: contenido || '',
+            editado:   false,
+        })
+        .select('id, contenido, editado, created_at, user_id')
+        .single();
+
+    if (comentarioError) return res.status(500).json({ error: comentarioError.message });
+
+    // Subir archivos del comentario
+    const archivosGuardados = [];
+    for (const file of files) {
+        try {
+            const ext         = path.extname(file.originalname).toLowerCase() || '.bin';
+            const safeName    = `${Date.now()}_${Math.random().toString(36).substr(2, 9)}${ext}`;
+            const storagePath = `comentarios/${comentario.id}/${safeName}`;
+
+            const { error: storageError } = await supabaseAdmin.storage
+                .from(STORAGE_BUCKET)
+                .upload(storagePath, file.buffer, { contentType: file.mimetype, upsert: false });
+
+            if (storageError) { console.error('Storage error comentario:', storageError.message); continue; }
+
+            const { data: archivoData } = await supabaseAdmin
+                .from('ticket_comentarios_archivos')
+                .insert({
+                    comentario_id:   comentario.id,
+                    nombre_original: file.originalname,
+                    nombre_storage:  storagePath,
+                    mime_type:       file.mimetype,
+                    tamanio:         file.size,
+                    subido_by:       req.user.id,
+                })
+                .select().single();
+
+            if (archivoData) archivosGuardados.push(archivoData);
+        } catch (err) {
+            console.error('Error subiendo archivo de comentario:', err.message);
+        }
+    }
+
+    // Registrar en historial
+    await registrarHistorial(
+        req.params.id, req.user.id, 'comentario',
+        `${req.user.nombre || req.user.email} añadió un comentario`,
+        { comentario_id: comentario.id }
+    );
+
+    res.status(201).json({
+        ...comentario,
+        ticket_comentarios_archivos: archivosGuardados,
+        profiles: { id: req.user.id, nombre: req.user.nombre || req.user.email },
+    });
+});
+
+app.delete('/api/v2/comentarios/:comentarioId', authGuard, async (req, res) => {
+    const { data: comentario } = await supabaseAdmin
+        .from('ticket_comentarios').select('*').eq('id', req.params.comentarioId).single();
+    if (!comentario) return res.status(404).json({ error: 'Comentario no encontrado.' });
+
+    if (comentario.user_id !== req.user.id && req.user.rol !== 'admin') {
+        return res.status(403).json({ error: 'Sin permisos para eliminar este comentario.' });
+    }
+
+    // Eliminar archivos del storage
+    const { data: archivos } = await supabaseAdmin
+        .from('ticket_comentarios_archivos').select('nombre_storage').eq('comentario_id', req.params.comentarioId);
+    if (archivos?.length) {
+        await supabaseAdmin.storage.from(STORAGE_BUCKET).remove(archivos.map(a => a.nombre_storage));
+    }
+
+    await supabaseAdmin.from('ticket_comentarios').delete().eq('id', req.params.comentarioId);
+    res.json({ ok: true });
+});
+
+// URL firmada para archivo de comentario
+app.get('/api/v2/comentarios/archivos/:archivoId/url', authGuard, async (req, res) => {
+    const { data: archivo, error } = await supabaseAdmin
+        .from('ticket_comentarios_archivos')
+        .select('nombre_storage, nombre_original, mime_type')
+        .eq('id', req.params.archivoId)
+        .single();
+
+    if (error || !archivo) return res.status(404).json({ error: 'Archivo no encontrado.' });
+
+    const { data: urlData, error: urlError } = await supabaseAdmin.storage
+        .from(STORAGE_BUCKET)
+        .createSignedUrl(archivo.nombre_storage, 3600);
+
+    if (urlError) return res.status(500).json({ error: urlError.message });
+
+    res.json({ url: urlData.signedUrl, nombre: archivo.nombre_original, mime_type: archivo.mime_type });
+});
+
+// ============================================
+// TICKETS V2 — ARCHIVOS DEL TICKET
+// ============================================
 app.post('/api/v2/tickets/:id/archivos', authGuard, (req, res, next) => {
     upload.array('files', 10)(req, res, (err) => {
         if (err instanceof multer.MulterError) {
-            if (err.code === 'LIMIT_FILE_SIZE') {
-                return res.status(400).json({ error: 'El archivo supera el límite de 50MB.' });
-            }
+            if (err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: 'El archivo supera el límite de 50MB.' });
             return res.status(400).json({ error: `Error al procesar archivos: ${err.message}` });
         }
-        if (err) {
-            return res.status(400).json({ error: err.message });
-        }
+        if (err) return res.status(400).json({ error: err.message });
         next();
     });
 }, async (req, res) => {
     const files = req.files;
-    if (!files?.length) {
-        return res.status(400).json({ error: 'No se han enviado archivos.' });
-    }
+    if (!files?.length) return res.status(400).json({ error: 'No se han enviado archivos.' });
 
-    // Verificar que el ticket existe
     const { data: ticket } = await supabaseAdmin
         .from('tickets_v2').select('id, numero').eq('id', req.params.id).single();
     if (!ticket) return res.status(404).json({ error: 'Ticket no encontrado.' });
@@ -720,49 +817,39 @@ app.post('/api/v2/tickets/:id/archivos', authGuard, (req, res, next) => {
 
     for (const file of files) {
         try {
-            const ext = path.extname(file.originalname).toLowerCase() || '.bin';
-            const safeName = `${Date.now()}_${Math.random().toString(36).substr(2, 9)}${ext}`;
+            const ext         = path.extname(file.originalname).toLowerCase() || '.bin';
+            const safeName    = `${Date.now()}_${Math.random().toString(36).substr(2, 9)}${ext}`;
             const storagePath = `tickets/${req.params.id}/${safeName}`;
 
             const { error: storageError } = await supabaseAdmin.storage
                 .from(STORAGE_BUCKET)
-                .upload(storagePath, file.buffer, {
-                    contentType: file.mimetype,
-                    upsert: false,
-                });
+                .upload(storagePath, file.buffer, { contentType: file.mimetype, upsert: false });
 
-            if (storageError) {
-                console.error('Error subiendo a storage:', storageError);
-                errores.push(`${file.originalname}: ${storageError.message}`);
-                continue;
-            }
+            if (storageError) { errores.push(`${file.originalname}: ${storageError.message}`); continue; }
 
             const { data: archivoData, error: dbError } = await supabaseAdmin
                 .from('ticket_archivos')
                 .insert({
-                    ticket_id: req.params.id,
+                    ticket_id:       req.params.id,
                     nombre_original: file.originalname,
-                    storage_path: storagePath,
-                    mime_type: file.mimetype,
-                    tamanio: file.size,
-                    subido_by: req.user.id,
+                    storage_path:    storagePath,
+                    mime_type:       file.mimetype,
+                    tamanio:         file.size,
+                    subido_by:       req.user.id,
                 })
                 .select().single();
 
             if (dbError) {
-                // Si falla la BD, limpiar el archivo de storage
                 await supabaseAdmin.storage.from(STORAGE_BUCKET).remove([storagePath]);
                 errores.push(`${file.originalname}: error al guardar en BD`);
                 continue;
             }
-
             results.push(archivoData);
         } catch (err) {
             errores.push(`${file.originalname}: ${err.message}`);
         }
     }
 
-    // Registrar en historial
     if (results.length > 0) {
         const nombres = results.map(r => r.nombre_original).join(', ');
         await registrarHistorial(
@@ -773,9 +860,7 @@ app.post('/api/v2/tickets/:id/archivos', authGuard, (req, res, next) => {
     }
 
     if (results.length === 0) {
-        return res.status(500).json({
-            error: `No se pudo subir ningún archivo. Errores: ${errores.join('; ')}`
-        });
+        return res.status(500).json({ error: `No se pudo subir ningún archivo. Errores: ${errores.join('; ')}` });
     }
 
     res.status(201).json(results);
@@ -792,15 +877,11 @@ app.get('/api/v2/archivos/:archivoId/url', authGuard, async (req, res) => {
 
     const { data: urlData, error: urlError } = await supabaseAdmin.storage
         .from(STORAGE_BUCKET)
-        .createSignedUrl(archivo.storage_path, 3600); // 1 hora
+        .createSignedUrl(archivo.storage_path, 3600);
 
     if (urlError) return res.status(500).json({ error: urlError.message });
 
-    res.json({
-        url: urlData.signedUrl,
-        nombre: archivo.nombre_original,
-        mime_type: archivo.mime_type,
-    });
+    res.json({ url: urlData.signedUrl, nombre: archivo.nombre_original, mime_type: archivo.mime_type });
 });
 
 app.delete('/api/v2/archivos/:archivoId', authGuard, async (req, res) => {
@@ -808,7 +889,6 @@ app.delete('/api/v2/archivos/:archivoId', authGuard, async (req, res) => {
         .from('ticket_archivos').select('*').eq('id', req.params.archivoId).single();
     if (!archivo) return res.status(404).json({ error: 'Archivo no encontrado' });
 
-    // Solo admin o quien lo subió puede eliminarlo
     if (archivo.subido_by !== req.user.id && req.user.rol !== 'admin') {
         return res.status(403).json({ error: 'Sin permisos para eliminar este archivo.' });
     }
@@ -830,11 +910,11 @@ app.post('/api/v2/tickets/:id/horas', authGuard, async (req, res) => {
     const { data, error } = await supabaseAdmin
         .from('ticket_horas')
         .insert({
-            ticket_id: req.params.id,
-            user_id: req.user.id,
-            horas: Number(horas),
+            ticket_id:   req.params.id,
+            user_id:     req.user.id,
+            horas:       Number(horas),
             descripcion: descripcion || null,
-            fecha: fecha || new Date().toISOString().split('T')[0],
+            fecha:       fecha || new Date().toISOString().split('T')[0],
         })
         .select().single();
 
@@ -875,19 +955,18 @@ app.get('/api/v2/estadisticas/resumen', authGuard, adminGuard, async (req, res) 
     const hace7dias = new Date(now - 7 * 86400000);
 
     res.json({
-        total:           data.length,
-        pendientes:      data.filter(t => t.estado === 'Pendiente').length,
-        en_curso:        data.filter(t => t.estado === 'En curso').length,
-        completados:     data.filter(t => t.estado === 'Completado').length,
-        facturados:      data.filter(t => t.estado === 'Facturado').length,
-        urgentes:        data.filter(t => t.prioridad === 'Urgente').length,
-        ultimos_7_dias:  data.filter(t => new Date(t.created_at) >= hace7dias).length,
+        total:          data.length,
+        pendientes:     data.filter(t => t.estado === 'Pendiente').length,
+        en_curso:       data.filter(t => t.estado === 'En curso').length,
+        completados:    data.filter(t => t.estado === 'Completado').length,
+        facturados:     data.filter(t => t.estado === 'Facturado').length,
+        urgentes:       data.filter(t => t.prioridad === 'Urgente').length,
+        ultimos_7_dias: data.filter(t => new Date(t.created_at) >= hace7dias).length,
     });
 });
 
 app.get('/api/v2/estadisticas/operarios', authGuard, adminGuard, async (req, res) => {
     const { desde, hasta } = req.query;
-
     let query = supabaseAdmin
         .from('tickets_v2')
         .select(`id, estado, prioridad, created_at, completed_at, invoiced_at, ticket_asignaciones(user_id), ticket_horas(user_id, horas)`);
@@ -898,13 +977,11 @@ app.get('/api/v2/estadisticas/operarios', authGuard, adminGuard, async (req, res
     if (error) return res.status(500).json({ error: error.message });
 
     const { data: todos } = await supabaseAdmin
-        .from('tickets_v2')
-        .select('id, estado, ticket_asignaciones(user_id)');
+        .from('tickets_v2').select('id, estado, ticket_asignaciones(user_id)');
 
     const userIds = new Set();
     tickets?.forEach(t => t.ticket_asignaciones?.forEach(a => userIds.add(a.user_id)));
     todos?.forEach(t => t.ticket_asignaciones?.forEach(a => userIds.add(a.user_id)));
-
     if (!userIds.size) return res.json([]);
 
     const { data: perfiles } = await supabaseAdmin
@@ -913,27 +990,17 @@ app.get('/api/v2/estadisticas/operarios', authGuard, adminGuard, async (req, res
     perfiles?.forEach(p => { profileMap[p.id] = p.nombre; });
 
     const map = {};
-
     tickets?.forEach(ticket => {
         ticket.ticket_asignaciones?.forEach(a => {
             if (!map[a.user_id]) {
-                map[a.user_id] = {
-                    id: a.user_id,
-                    nombre: profileMap[a.user_id] || '?',
-                    tickets_totales: 0,
-                    tickets_completados: 0,
-                    tickets_pendientes: 0,
-                    horas_totales: 0,
-                    tiempos_resolucion: [],
-                };
+                map[a.user_id] = { id: a.user_id, nombre: profileMap[a.user_id] || '?', tickets_totales: 0, tickets_completados: 0, tickets_pendientes: 0, horas_totales: 0, tiempos_resolucion: [] };
             }
             map[a.user_id].tickets_totales++;
             if (['Completado', 'Facturado'].includes(ticket.estado)) {
                 map[a.user_id].tickets_completados++;
                 const fechaCierre = ticket.invoiced_at || ticket.completed_at;
                 if (ticket.created_at && fechaCierre) {
-                    const horas = (new Date(fechaCierre) - new Date(ticket.created_at)) / 3600000;
-                    map[a.user_id].tiempos_resolucion.push(horas);
+                    map[a.user_id].tiempos_resolucion.push((new Date(fechaCierre) - new Date(ticket.created_at)) / 3600000);
                 }
             }
         });
@@ -945,9 +1012,7 @@ app.get('/api/v2/estadisticas/operarios', authGuard, adminGuard, async (req, res
     todos?.forEach(ticket => {
         ticket.ticket_asignaciones?.forEach(a => {
             if (!map[a.user_id]) return;
-            if (['Pendiente', 'En curso'].includes(ticket.estado)) {
-                map[a.user_id].tickets_pendientes++;
-            }
+            if (['Pendiente', 'En curso'].includes(ticket.estado)) map[a.user_id].tickets_pendientes++;
         });
     });
 
@@ -973,12 +1038,7 @@ app.get('/api/v2/estadisticas/empresas', authGuard, adminGuard, async (req, res)
     const map = {};
     data?.forEach(t => {
         if (!map[t.empresa_id]) {
-            map[t.empresa_id] = {
-                id: t.empresa_id,
-                nombre: t.empresas?.nombre,
-                total: 0, pendientes: 0, en_curso: 0,
-                completados: 0, facturados: 0, urgentes: 0,
-            };
+            map[t.empresa_id] = { id: t.empresa_id, nombre: t.empresas?.nombre, total: 0, pendientes: 0, en_curso: 0, completados: 0, facturados: 0, urgentes: 0 };
         }
         map[t.empresa_id].total++;
         if (t.estado === 'Pendiente')  map[t.empresa_id].pendientes++;
@@ -992,14 +1052,330 @@ app.get('/api/v2/estadisticas/empresas', authGuard, adminGuard, async (req, res)
 });
 
 // ============================================
-// CATCH-ALL — devuelve JSON para rutas no encontradas
-// Evita que Express devuelva HTML en rutas /api/ inexistentes
+// CHAT — CANALES
+// Tablas requeridas:
+//   chat_canales: id, nombre, descripcion, tipo ('canal'|'directo'), created_by, created_at
+//   chat_canales_miembros: id, canal_id, user_id, rol ('miembro'|'admin'), joined_at
+//   chat_mensajes: id, canal_id, user_id, contenido, ticket_ref_id, created_at
+//   chat_mensajes_archivos: id, mensaje_id, nombre_original, storage_path, mime_type, tamanio, created_at
+// ============================================
+
+// Listar canales del usuario actual
+app.get('/api/v2/chat/canales', authGuard, async (req, res) => {
+    // Obtener canales donde el usuario es miembro
+    const { data: memberships, error: memberError } = await supabaseAdmin
+        .from('chat_canales_miembros')
+        .select('canal_id')
+        .eq('user_id', req.user.id);
+
+    if (memberError) return res.status(500).json({ error: memberError.message });
+
+    const canalIds = memberships.map(m => m.canal_id);
+    if (!canalIds.length) return res.json([]);
+
+    const { data: canales, error } = await supabaseAdmin
+        .from('chat_canales')
+        .select(`
+            id, nombre, descripcion, tipo, created_at,
+            chat_canales_miembros(user_id, rol, joined_at)
+        `)
+        .in('id', canalIds)
+        .order('created_at', { ascending: true });
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    // Resolver nombres de miembros
+    const userIds = new Set();
+    canales.forEach(c => c.chat_canales_miembros?.forEach(m => userIds.add(m.user_id)));
+
+    let profileMap = {};
+    if (userIds.size) {
+        const { data: perfiles } = await supabaseAdmin
+            .from('profiles').select('id, nombre').in('id', [...userIds]);
+        perfiles?.forEach(p => { profileMap[p.id] = p.nombre; });
+    }
+
+    res.json(canales.map(c => ({
+        ...c,
+        chat_canales_miembros: (c.chat_canales_miembros || []).map(m => ({
+            ...m,
+            profiles: { id: m.user_id, nombre: profileMap[m.user_id] || '?' },
+        })),
+    })));
+});
+
+// Crear canal
+app.post('/api/v2/chat/canales', authGuard, async (req, res) => {
+    const { nombre, descripcion, tipo, miembros } = req.body;
+    if (!nombre) return res.status(400).json({ error: 'El nombre es obligatorio.' });
+
+    const tipoCanal = tipo || 'canal';
+
+    const { data: canal, error } = await supabaseAdmin
+        .from('chat_canales')
+        .insert({ nombre: nombre.toLowerCase().replace(/\s+/g, '-'), descripcion: descripcion || null, tipo: tipoCanal, creado_por: req.user.id })
+        .select().single();
+
+    if (error) {
+        if (error.message.includes('unique') || error.code === '23505') {
+            return res.status(409).json({ error: 'Ya existe un canal con ese nombre.' });
+        }
+        return res.status(500).json({ error: error.message });
+    }
+
+    // Añadir al creador como admin del canal
+    const miembrosInsert = [{ canal_id: canal.id, user_id: req.user.id, rol: 'admin' }];
+
+    // Añadir miembros adicionales
+    if (miembros?.length) {
+        miembros.forEach(uid => {
+            if (uid !== req.user.id) {
+                miembrosInsert.push({ canal_id: canal.id, user_id: uid, rol: 'miembro' });
+            }
+        });
+    }
+
+    await supabaseAdmin.from('chat_canales_miembros').insert(miembrosInsert);
+
+    // Devolver canal con miembros
+    const { data: canalCompleto } = await supabaseAdmin
+        .from('chat_canales')
+        .select(`id, nombre, descripcion, tipo, created_at, chat_canales_miembros(user_id, rol, joined_at)`)
+        .eq('id', canal.id)
+        .single();
+
+    res.status(201).json(canalCompleto);
+});
+
+// Eliminar canal (solo admin)
+app.delete('/api/v2/chat/canales/:id', authGuard, adminGuard, async (req, res) => {
+    // Eliminar archivos del storage asociados al canal
+    const { data: mensajes } = await supabaseAdmin
+        .from('chat_mensajes').select('id').eq('canal_id', req.params.id);
+
+    if (mensajes?.length) {
+        const mensajeIds = mensajes.map(m => m.id);
+        const { data: archivos } = await supabaseAdmin
+            .from('chat_mensajes_archivos').select('nombre_storage').in('mensaje_id', mensajeIds);
+        if (archivos?.length) {
+            await supabaseAdmin.storage.from(CHAT_STORAGE_BUCKET).remove(archivos.map(a => a.nombre_storage));
+        }
+    }
+
+    const { error } = await supabaseAdmin.from('chat_canales').delete().eq('id', req.params.id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+});
+
+// Añadir miembros a un canal
+app.post('/api/v2/chat/canales/:id/miembros', authGuard, async (req, res) => {
+    const { miembros } = req.body;
+    if (!miembros?.length) return res.status(400).json({ error: 'Debes proporcionar al menos un miembro.' });
+
+    const inserts = miembros.map(uid => ({ canal_id: req.params.id, user_id: uid, rol: 'miembro' }));
+
+    const { error } = await supabaseAdmin
+        .from('chat_canales_miembros')
+        .upsert(inserts, { onConflict: 'canal_id,user_id' });
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+});
+
+// ============================================
+// CHAT — MENSAJES
+// ============================================
+app.get('/api/v2/chat/canales/:id/mensajes', authGuard, async (req, res) => {
+    const { limit = 100, before } = req.query;
+
+    // Verificar que el usuario es miembro del canal
+    const { data: membership } = await supabaseAdmin
+        .from('chat_canales_miembros')
+        .select('canal_id')
+        .eq('canal_id', req.params.id)
+        .eq('user_id', req.user.id)
+        .single();
+
+    if (!membership) return res.status(403).json({ error: 'No eres miembro de este canal.' });
+
+    let query = supabaseAdmin
+        .from('chat_mensajes')
+        .select(`
+            id, contenido, ticket_ref_id, created_at, user_id,
+            chat_mensajes_archivos(id, nombre_original, mime_type, tamanio)
+        `)
+        .eq('canal_id', req.params.id)
+        .order('created_at', { ascending: true })
+        .limit(Number(limit));
+
+    if (before) query = query.lt('created_at', before);
+
+    const { data, error } = await query;
+    if (error) return res.status(500).json({ error: error.message });
+
+    // Resolver nombres de usuarios
+    const userIds = [...new Set(data.map(m => m.user_id))];
+    let profileMap = {};
+    if (userIds.length) {
+        const { data: perfiles } = await supabaseAdmin
+            .from('profiles').select('id, nombre').in('id', userIds);
+        perfiles?.forEach(p => { profileMap[p.id] = p.nombre; });
+    }
+
+    // Resolver referencias a tickets
+    const ticketRefIds = [...new Set(data.map(m => m.ticket_ref_id).filter(Boolean))];
+    let ticketMap = {};
+    if (ticketRefIds.length) {
+        const { data: tickets } = await supabaseAdmin
+            .from('tickets_v2').select('id, numero, asunto, estado').in('id', ticketRefIds);
+        tickets?.forEach(t => { ticketMap[t.id] = t; });
+    }
+
+    res.json(data.map(m => ({
+        ...m,
+        profiles: { id: m.user_id, nombre: profileMap[m.user_id] || '?' },
+        tickets:  m.ticket_ref_id ? ticketMap[m.ticket_ref_id] || null : null,
+    })));
+});
+
+// Enviar mensaje
+app.post('/api/v2/chat/canales/:id/mensajes', authGuard, (req, res, next) => {
+    upload.array('files', 10)(req, res, (err) => {
+        if (err instanceof multer.MulterError) {
+            if (err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: 'Archivo supera el límite de 50MB.' });
+            return res.status(400).json({ error: err.message });
+        }
+        if (err) return res.status(400).json({ error: err.message });
+        next();
+    });
+}, async (req, res) => {
+    const contenido      = req.body.contenido?.trim() || '';
+    const ticket_ref_id  = req.body.ticket_ref_id || null;
+    const files          = req.files || [];
+
+    if (!contenido && !files.length) {
+        return res.status(400).json({ error: 'El mensaje debe tener contenido o archivos.' });
+    }
+
+    // Verificar membresía
+    const { data: membership } = await supabaseAdmin
+        .from('chat_canales_miembros')
+        .select('canal_id')
+        .eq('canal_id', req.params.id)
+        .eq('user_id', req.user.id)
+        .single();
+
+    if (!membership) return res.status(403).json({ error: 'No eres miembro de este canal.' });
+
+    // Crear mensaje
+    const { data: mensaje, error: mensajeError } = await supabaseAdmin
+        .from('chat_mensajes')
+        .insert({
+            canal_id:      req.params.id,
+            user_id:       req.user.id,
+            contenido:     contenido || '',
+            ticket_ref_id: ticket_ref_id || null,
+        })
+        .select('id, contenido, ticket_ref_id, created_at, user_id')
+        .single();
+
+    if (mensajeError) return res.status(500).json({ error: mensajeError.message });
+
+    // Subir archivos
+    const archivosGuardados = [];
+    for (const file of files) {
+        try {
+            const ext         = path.extname(file.originalname).toLowerCase() || '.bin';
+            const safeName    = `${Date.now()}_${Math.random().toString(36).substr(2, 9)}${ext}`;
+            const storagePath = `chat/${req.params.id}/${mensaje.id}/${safeName}`;
+
+            const { error: storageError } = await supabaseAdmin.storage
+                .from(CHAT_STORAGE_BUCKET)
+                .upload(storagePath, file.buffer, { contentType: file.mimetype, upsert: false });
+
+            if (storageError) { console.error('Storage error chat:', storageError.message); continue; }
+
+            const { data: archivoData } = await supabaseAdmin
+                .from('chat_mensajes_archivos')
+                .insert({
+                    mensaje_id:      mensaje.id,
+                    nombre_original: file.originalname,
+                    nombre_storage:  storagePath,
+                    mime_type:       file.mimetype,
+                    tamanio:         file.size,
+                })
+                .select().single();
+
+            if (archivoData) archivosGuardados.push(archivoData);
+        } catch (err) {
+            console.error('Error subiendo archivo chat:', err.message);
+        }
+    }
+
+    // Resolver ticket referenciado si existe
+    let ticketRef = null;
+    if (ticket_ref_id) {
+        const { data: t } = await supabaseAdmin
+            .from('tickets_v2').select('id, numero, asunto, estado').eq('id', ticket_ref_id).single();
+        ticketRef = t || null;
+    }
+
+    res.status(201).json({
+        ...mensaje,
+        chat_mensajes_archivos: archivosGuardados,
+        profiles: { id: req.user.id, nombre: req.user.nombre || req.user.email },
+        tickets:  ticketRef,
+    });
+});
+
+// Eliminar mensaje
+app.delete('/api/v2/chat/mensajes/:mensajeId', authGuard, async (req, res) => {
+    const { data: mensaje } = await supabaseAdmin
+        .from('chat_mensajes').select('*').eq('id', req.params.mensajeId).single();
+    if (!mensaje) return res.status(404).json({ error: 'Mensaje no encontrado.' });
+
+    if (mensaje.user_id !== req.user.id && req.user.rol !== 'admin') {
+        return res.status(403).json({ error: 'Sin permisos para eliminar este mensaje.' });
+    }
+
+    // Eliminar archivos del storage
+    const { data: archivos } = await supabaseAdmin
+        .from('chat_mensajes_archivos').select('nombre_storage').eq('mensaje_id', req.params.mensajeId);
+    if (archivos?.length) {
+        await supabaseAdmin.storage.from(CHAT_STORAGE_BUCKET).remove(archivos.map(a => a.nombre_storage));
+    }
+
+    await supabaseAdmin.from('chat_mensajes').delete().eq('id', req.params.mensajeId);
+    res.json({ ok: true });
+});
+
+// URL firmada para archivo de chat
+app.get('/api/v2/chat/archivos/:archivoId/url', authGuard, async (req, res) => {
+    const { data: archivo, error } = await supabaseAdmin
+        .from('chat_mensajes_archivos')
+        .select('nombre_storage, nombre_original, mime_type')
+        .eq('id', req.params.archivoId)
+        .single();
+
+    if (error || !archivo) return res.status(404).json({ error: 'Archivo no encontrado.' });
+
+    const { data: urlData, error: urlError } = await supabaseAdmin.storage
+        .from(CHAT_STORAGE_BUCKET)
+        .createSignedUrl(archivo.nombre_storage, 3600);
+
+    if (urlError) return res.status(500).json({ error: urlError.message });
+
+    res.json({ url: urlData.signedUrl, nombre: archivo.nombre_original, mime_type: archivo.mime_type });
+});
+
+// ============================================
+// CATCH-ALL — JSON para rutas /api/ no encontradas
 // ============================================
 app.use('/api/*', (req, res) => {
     res.status(404).json({ error: `Ruta no encontrada: ${req.method} ${req.path}` });
 });
 
-// Error handler global — siempre JSON
+// Error handler global
 app.use((err, req, res, next) => {
     console.error('Error no controlado:', err);
     res.status(500).json({ error: err.message || 'Error interno del servidor' });
@@ -1010,4 +1386,6 @@ app.listen(PORT, () => {
     console.log(`   Backend corriendo en http://localhost:${PORT}`);
     console.log(`   Supabase URL: ${process.env.SUPABASE_URL}`);
     console.log(`   Frontend: ${process.env.FRONTEND_URL || '*'}`);
+    console.log(`   Bucket tickets: ${STORAGE_BUCKET}`);
+    console.log(`   Bucket chat:    ${CHAT_STORAGE_BUCKET}`);
 });
