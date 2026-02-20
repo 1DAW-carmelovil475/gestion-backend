@@ -162,13 +162,11 @@ app.get('/api/usuarios', authGuard, adminGuard, async (req, res) => {
 });
 
 app.post('/api/usuarios', authGuard, adminGuard, async (req, res) => {
-    const { nombre, email, rol } = req.body;
-    if (!nombre || !email || !rol) {
-        return res.status(400).json({ error: 'Nombre, email y rol son obligatorios.' });
-    }
+    const { nombre, email, rol, password } = req.body;
 
-    const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$';
-    const password = Array.from({ length: 12 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+    if (!nombre || !email || !rol || !password) {
+        return res.status(400).json({ error: 'Nombre, email, rol y contraseña son obligatorios.' });
+    }
 
     const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
         email: email.toLowerCase().trim(),
@@ -193,7 +191,6 @@ app.post('/api/usuarios', authGuard, adminGuard, async (req, res) => {
         id: authData.user.id,
         email: authData.user.email,
         nombre, rol, activo: true,
-        _tempPassword: password,
     });
 });
 
@@ -1010,7 +1007,7 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`✅ Backend corriendo en http://localhost:${PORT}`);
+    console.log(`   Backend corriendo en http://localhost:${PORT}`);
     console.log(`   Supabase URL: ${process.env.SUPABASE_URL}`);
     console.log(`   Frontend: ${process.env.FRONTEND_URL || '*'}`);
 });
