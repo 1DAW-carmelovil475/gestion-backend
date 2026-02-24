@@ -44,15 +44,9 @@ const upload = multer({
 // ============================================
 // CORS
 // ============================================
+// Allow all origins for development (React/Vite)
 const corsOptions = {
-    origin: function (origin, callback) {
-        const allowed = (process.env.FRONTEND_URL || '*').split(',').map(u => u.trim());
-        if (allowed.includes('*') || !origin || allowed.includes(origin)) {
-            callback(null, true);
-        } else {
-            callback(new Error('No permitido por CORS'));
-        }
-    },
+    origin: true, // Allow all origins in development
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
