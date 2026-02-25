@@ -21,6 +21,8 @@ const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
     fileFilter: (req, file, cb) => {
+        // El nombre correcto llega en file_names. restoreFileNames() lo aplica después.
+
         const allowed = [
             'image/jpeg', 'image/png', 'image/gif', 'image/webp',
             'application/pdf',
@@ -40,6 +42,23 @@ const upload = multer({
         }
     }
 });
+
+// ── Helper: restaurar nombres reales desde el campo file_names ────────────────
+// El frontend envía file_names como JSON array con los nombres originales UTF-8.
+// Si viene ese campo, lo usamos; si no, usamos el originalname de multer.
+function restoreFileNames(files, req) {
+    let fileNames = null;
+    try {
+        if (req.body.file_names) {
+            fileNames = JSON.parse(req.body.file_names);
+        }
+    } catch {}
+    if (!fileNames || !Array.isArray(fileNames)) return files;
+    return files.map((file, i) => {
+        if (fileNames[i]) file.originalname = fileNames[i];
+        return file;
+    });
+}
 
 // ============================================
 // CORS
@@ -671,7 +690,8 @@ app.post('/api/v2/tickets/:id/comentarios', authGuard, (req, res, next) => {
     });
 }, async (req, res) => {
     const contenido = req.body.contenido?.trim() || '';
-    const files     = req.files || [];
+    // FIX: restaurar nombres reales desde file_names
+    const files = restoreFileNames(req.files || [], req);
 
     if (!contenido && !files.length) {
         return res.status(400).json({ error: 'El comentario debe tener texto o archivos.' });
@@ -788,7 +808,8 @@ app.post('/api/v2/tickets/:id/archivos', authGuard, (req, res, next) => {
         next();
     });
 }, async (req, res) => {
-    const files = req.files;
+    // FIX: restaurar nombres reales desde file_names
+    const files = restoreFileNames(req.files || [], req);
     if (!files?.length) return res.status(400).json({ error: 'No se han enviado archivos.' });
 
     const { data: ticket } = await supabaseAdmin
@@ -1038,7 +1059,6 @@ app.get('/api/v2/estadisticas/empresas', authGuard, adminGuard, async (req, res)
 // CHAT — CANALES
 // ============================================
 
-// Listar canales del usuario actual
 app.get('/api/v2/chat/canales', authGuard, async (req, res) => {
     const { data: memberships, error: memberError } = await supabaseAdmin
         .from('chat_canales_miembros')
@@ -1080,7 +1100,6 @@ app.get('/api/v2/chat/canales', authGuard, async (req, res) => {
     })));
 });
 
-// Crear canal
 app.post('/api/v2/chat/canales', authGuard, async (req, res) => {
     const { nombre, descripcion, tipo, miembros } = req.body;
     if (!nombre) return res.status(400).json({ error: 'El nombre es obligatorio.' });
@@ -1120,14 +1139,10 @@ app.post('/api/v2/chat/canales', authGuard, async (req, res) => {
     res.status(201).json(canalCompleto);
 });
 
-// ============================================
-// NUEVA RUTA: Editar canal (nombre, descripcion, miembros)
-// ============================================
 app.put('/api/v2/chat/canales/:id', authGuard, adminGuard, async (req, res) => {
     const { nombre, descripcion, miembros } = req.body;
     if (!nombre) return res.status(400).json({ error: 'El nombre es obligatorio.' });
 
-    // 1. Actualizar datos del canal
     const { data: canal, error: canalError } = await supabaseAdmin
         .from('chat_canales')
         .update({
@@ -1140,16 +1155,13 @@ app.put('/api/v2/chat/canales/:id', authGuard, adminGuard, async (req, res) => {
 
     if (canalError) return res.status(500).json({ error: canalError.message });
 
-    // 2. Actualizar miembros: borrar todos excepto el creador/admin actual y volver a insertar
     if (Array.isArray(miembros)) {
-        // Eliminar miembros que no son el usuario actual (él siempre queda)
         await supabaseAdmin
             .from('chat_canales_miembros')
             .delete()
             .eq('canal_id', req.params.id)
             .neq('user_id', req.user.id);
 
-        // Insertar nuevos miembros
         if (miembros.length > 0) {
             const inserts = miembros
                 .filter(uid => uid !== req.user.id)
@@ -1163,7 +1175,6 @@ app.put('/api/v2/chat/canales/:id', authGuard, adminGuard, async (req, res) => {
         }
     }
 
-    // 3. Devolver canal actualizado con miembros
     const { data: canalCompleto, error: fetchError } = await supabaseAdmin
         .from('chat_canales')
         .select(`id, nombre, descripcion, tipo, created_at, chat_canales_miembros(user_id, rol, joined_at)`)
@@ -1172,7 +1183,6 @@ app.put('/api/v2/chat/canales/:id', authGuard, adminGuard, async (req, res) => {
 
     if (fetchError) return res.status(500).json({ error: fetchError.message });
 
-    // Resolver nombres de miembros
     const userIds = (canalCompleto.chat_canales_miembros || []).map(m => m.user_id);
     let profileMap = {};
     if (userIds.length) {
@@ -1190,7 +1200,6 @@ app.put('/api/v2/chat/canales/:id', authGuard, adminGuard, async (req, res) => {
     });
 });
 
-// Eliminar canal (solo admin)
 app.delete('/api/v2/chat/canales/:id', authGuard, adminGuard, async (req, res) => {
     const { data: mensajes } = await supabaseAdmin
         .from('chat_mensajes').select('id').eq('canal_id', req.params.id);
@@ -1209,7 +1218,6 @@ app.delete('/api/v2/chat/canales/:id', authGuard, adminGuard, async (req, res) =
     res.json({ ok: true });
 });
 
-// Añadir miembros a un canal
 app.post('/api/v2/chat/canales/:id/miembros', authGuard, async (req, res) => {
     const { miembros } = req.body;
     if (!miembros?.length) return res.status(400).json({ error: 'Debes proporcionar al menos un miembro.' });
@@ -1262,7 +1270,6 @@ app.get('/api/v2/chat/canales/:id/mensajes', authGuard, async (req, res) => {
         perfiles?.forEach(p => { profileMap[p.id] = p.nombre; });
     }
 
-    // Resolver referencias a tickets — se devuelven como campo "tickets"
     const ticketRefIds = [...new Set(data.map(m => m.ticket_ref_id).filter(Boolean))];
     let ticketMap = {};
     if (ticketRefIds.length) {
@@ -1278,7 +1285,6 @@ app.get('/api/v2/chat/canales/:id/mensajes', authGuard, async (req, res) => {
     })));
 });
 
-// Enviar mensaje
 app.post('/api/v2/chat/canales/:id/mensajes', authGuard, (req, res, next) => {
     upload.array('files', 10)(req, res, (err) => {
         if (err instanceof multer.MulterError) {
@@ -1291,7 +1297,8 @@ app.post('/api/v2/chat/canales/:id/mensajes', authGuard, (req, res, next) => {
 }, async (req, res) => {
     const contenido      = req.body.contenido?.trim() || '';
     const ticket_ref_id  = req.body.ticket_ref_id || null;
-    const files          = req.files || [];
+    // FIX: restaurar nombres reales desde file_names
+    const files          = restoreFileNames(req.files || [], req);
 
     if (!contenido && !files.length) {
         return res.status(400).json({ error: 'El mensaje debe tener contenido o archivos.' });
@@ -1362,20 +1369,16 @@ app.post('/api/v2/chat/canales/:id/mensajes', authGuard, (req, res, next) => {
         ...mensaje,
         chat_mensajes_archivos: archivosGuardados,
         profiles: { id: req.user.id, nombre: req.user.nombre || req.user.email },
-        tickets:  ticketRef,  // ← Consistente con GET
+        tickets:  ticketRef,
     });
 });
 
-// ============================================
-// NUEVA RUTA: Editar mensaje (PATCH)
-// ============================================
 app.patch('/api/v2/chat/mensajes/:mensajeId', authGuard, async (req, res) => {
     const { contenido } = req.body;
     if (!contenido?.trim()) {
         return res.status(400).json({ error: 'El contenido no puede estar vacío.' });
     }
 
-    // Verificar que el mensaje pertenece al usuario
     const { data: mensaje } = await supabaseAdmin
         .from('chat_mensajes').select('user_id').eq('id', req.params.mensajeId).single();
 
@@ -1395,9 +1398,6 @@ app.patch('/api/v2/chat/mensajes/:mensajeId', authGuard, async (req, res) => {
     res.json(data);
 });
 
-// ============================================
-// NUEVA RUTA: Anclar/desanclar mensaje (PATCH /pin)
-// ============================================
 app.patch('/api/v2/chat/mensajes/:mensajeId/pin', authGuard, async (req, res) => {
     const { anclado } = req.body;
     if (typeof anclado !== 'boolean') {
@@ -1415,7 +1415,6 @@ app.patch('/api/v2/chat/mensajes/:mensajeId/pin', authGuard, async (req, res) =>
     res.json(data);
 });
 
-// Eliminar mensaje
 app.delete('/api/v2/chat/mensajes/:mensajeId', authGuard, async (req, res) => {
     const { data: mensaje } = await supabaseAdmin
         .from('chat_mensajes').select('*').eq('id', req.params.mensajeId).single();
@@ -1435,9 +1434,6 @@ app.delete('/api/v2/chat/mensajes/:mensajeId', authGuard, async (req, res) => {
     res.json({ ok: true });
 });
 
-// ============================================
-// NUEVA RUTA: URL firmada para archivo de chat
-// ============================================
 app.get('/api/v2/chat/archivos/:archivoId/url', authGuard, async (req, res) => {
     const { data: archivo, error } = await supabaseAdmin
         .from('chat_mensajes_archivos')
