@@ -44,11 +44,10 @@ const upload = multer({
 // ============================================
 // CORS
 // ============================================
-// Allow all origins for development (React/Vite)
 const corsOptions = {
-    origin: true, // Allow all origins in development
+    origin: true,
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
 };
 
@@ -607,7 +606,7 @@ app.put('/api/v2/tickets/:id/notas', authGuard, async (req, res) => {
 });
 
 // ============================================
-// TICKETS V2 — NOTAS INTERNAS (legacy, se mantiene por compatibilidad)
+// TICKETS V2 — NOTAS INTERNAS
 // ============================================
 app.post('/api/v2/tickets/:id/notas-internas', authGuard, async (req, res) => {
     const { texto } = req.body;
@@ -634,10 +633,6 @@ app.post('/api/v2/tickets/:id/notas-internas', authGuard, async (req, res) => {
 
 // ============================================
 // TICKETS V2 — COMENTARIOS
-// Tabla requerida: ticket_comentarios
-//   id, ticket_id, user_id, contenido, editado (bool), created_at, updated_at
-// Tabla requerida: ticket_comentarios_archivos
-//   id, comentario_id, nombre_original, storage_path, mime_type, tamanio, subido_by, created_at
 // ============================================
 app.get('/api/v2/tickets/:id/comentarios', authGuard, async (req, res) => {
     const { data, error } = await supabaseAdmin
@@ -682,12 +677,10 @@ app.post('/api/v2/tickets/:id/comentarios', authGuard, (req, res, next) => {
         return res.status(400).json({ error: 'El comentario debe tener texto o archivos.' });
     }
 
-    // Verificar ticket
     const { data: ticket } = await supabaseAdmin
         .from('tickets_v2').select('id').eq('id', req.params.id).single();
     if (!ticket) return res.status(404).json({ error: 'Ticket no encontrado.' });
 
-    // Crear comentario
     const { data: comentario, error: comentarioError } = await supabaseAdmin
         .from('ticket_comentarios')
         .insert({
@@ -701,7 +694,6 @@ app.post('/api/v2/tickets/:id/comentarios', authGuard, (req, res, next) => {
 
     if (comentarioError) return res.status(500).json({ error: comentarioError.message });
 
-    // Subir archivos del comentario
     const archivosGuardados = [];
     for (const file of files) {
         try {
@@ -733,7 +725,6 @@ app.post('/api/v2/tickets/:id/comentarios', authGuard, (req, res, next) => {
         }
     }
 
-    // Registrar en historial
     await registrarHistorial(
         req.params.id, req.user.id, 'comentario',
         `${req.user.nombre || req.user.email} añadió un comentario`,
@@ -756,7 +747,6 @@ app.delete('/api/v2/comentarios/:comentarioId', authGuard, async (req, res) => {
         return res.status(403).json({ error: 'Sin permisos para eliminar este comentario.' });
     }
 
-    // Eliminar archivos del storage
     const { data: archivos } = await supabaseAdmin
         .from('ticket_comentarios_archivos').select('nombre_storage').eq('comentario_id', req.params.comentarioId);
     if (archivos?.length) {
@@ -767,7 +757,6 @@ app.delete('/api/v2/comentarios/:comentarioId', authGuard, async (req, res) => {
     res.json({ ok: true });
 });
 
-// URL firmada para archivo de comentario
 app.get('/api/v2/comentarios/archivos/:archivoId/url', authGuard, async (req, res) => {
     const { data: archivo, error } = await supabaseAdmin
         .from('ticket_comentarios_archivos')
@@ -1047,16 +1036,10 @@ app.get('/api/v2/estadisticas/empresas', authGuard, adminGuard, async (req, res)
 
 // ============================================
 // CHAT — CANALES
-// Tablas requeridas:
-//   chat_canales: id, nombre, descripcion, tipo ('canal'|'directo'), created_by, created_at
-//   chat_canales_miembros: id, canal_id, user_id, rol ('miembro'|'admin'), joined_at
-//   chat_mensajes: id, canal_id, user_id, contenido, ticket_ref_id, created_at
-//   chat_mensajes_archivos: id, mensaje_id, nombre_original, storage_path, mime_type, tamanio, created_at
 // ============================================
 
 // Listar canales del usuario actual
 app.get('/api/v2/chat/canales', authGuard, async (req, res) => {
-    // Obtener canales donde el usuario es miembro
     const { data: memberships, error: memberError } = await supabaseAdmin
         .from('chat_canales_miembros')
         .select('canal_id')
@@ -1078,7 +1061,6 @@ app.get('/api/v2/chat/canales', authGuard, async (req, res) => {
 
     if (error) return res.status(500).json({ error: error.message });
 
-    // Resolver nombres de miembros
     const userIds = new Set();
     canales.forEach(c => c.chat_canales_miembros?.forEach(m => userIds.add(m.user_id)));
 
@@ -1117,10 +1099,8 @@ app.post('/api/v2/chat/canales', authGuard, async (req, res) => {
         return res.status(500).json({ error: error.message });
     }
 
-    // Añadir al creador como admin del canal
     const miembrosInsert = [{ canal_id: canal.id, user_id: req.user.id, rol: 'admin' }];
 
-    // Añadir miembros adicionales
     if (miembros?.length) {
         miembros.forEach(uid => {
             if (uid !== req.user.id) {
@@ -1131,7 +1111,6 @@ app.post('/api/v2/chat/canales', authGuard, async (req, res) => {
 
     await supabaseAdmin.from('chat_canales_miembros').insert(miembrosInsert);
 
-    // Devolver canal con miembros
     const { data: canalCompleto } = await supabaseAdmin
         .from('chat_canales')
         .select(`id, nombre, descripcion, tipo, created_at, chat_canales_miembros(user_id, rol, joined_at)`)
@@ -1141,9 +1120,78 @@ app.post('/api/v2/chat/canales', authGuard, async (req, res) => {
     res.status(201).json(canalCompleto);
 });
 
+// ============================================
+// NUEVA RUTA: Editar canal (nombre, descripcion, miembros)
+// ============================================
+app.put('/api/v2/chat/canales/:id', authGuard, adminGuard, async (req, res) => {
+    const { nombre, descripcion, miembros } = req.body;
+    if (!nombre) return res.status(400).json({ error: 'El nombre es obligatorio.' });
+
+    // 1. Actualizar datos del canal
+    const { data: canal, error: canalError } = await supabaseAdmin
+        .from('chat_canales')
+        .update({
+            nombre:      nombre.toLowerCase().replace(/\s+/g, '-'),
+            descripcion: descripcion || null,
+        })
+        .eq('id', req.params.id)
+        .select()
+        .single();
+
+    if (canalError) return res.status(500).json({ error: canalError.message });
+
+    // 2. Actualizar miembros: borrar todos excepto el creador/admin actual y volver a insertar
+    if (Array.isArray(miembros)) {
+        // Eliminar miembros que no son el usuario actual (él siempre queda)
+        await supabaseAdmin
+            .from('chat_canales_miembros')
+            .delete()
+            .eq('canal_id', req.params.id)
+            .neq('user_id', req.user.id);
+
+        // Insertar nuevos miembros
+        if (miembros.length > 0) {
+            const inserts = miembros
+                .filter(uid => uid !== req.user.id)
+                .map(uid => ({ canal_id: req.params.id, user_id: uid, rol: 'miembro' }));
+
+            if (inserts.length > 0) {
+                await supabaseAdmin
+                    .from('chat_canales_miembros')
+                    .upsert(inserts, { onConflict: 'canal_id,user_id' });
+            }
+        }
+    }
+
+    // 3. Devolver canal actualizado con miembros
+    const { data: canalCompleto, error: fetchError } = await supabaseAdmin
+        .from('chat_canales')
+        .select(`id, nombre, descripcion, tipo, created_at, chat_canales_miembros(user_id, rol, joined_at)`)
+        .eq('id', req.params.id)
+        .single();
+
+    if (fetchError) return res.status(500).json({ error: fetchError.message });
+
+    // Resolver nombres de miembros
+    const userIds = (canalCompleto.chat_canales_miembros || []).map(m => m.user_id);
+    let profileMap = {};
+    if (userIds.length) {
+        const { data: perfiles } = await supabaseAdmin
+            .from('profiles').select('id, nombre').in('id', userIds);
+        perfiles?.forEach(p => { profileMap[p.id] = p.nombre; });
+    }
+
+    res.json({
+        ...canalCompleto,
+        chat_canales_miembros: (canalCompleto.chat_canales_miembros || []).map(m => ({
+            ...m,
+            profiles: { id: m.user_id, nombre: profileMap[m.user_id] || '?' },
+        })),
+    });
+});
+
 // Eliminar canal (solo admin)
 app.delete('/api/v2/chat/canales/:id', authGuard, adminGuard, async (req, res) => {
-    // Eliminar archivos del storage asociados al canal
     const { data: mensajes } = await supabaseAdmin
         .from('chat_mensajes').select('id').eq('canal_id', req.params.id);
 
@@ -1182,7 +1230,6 @@ app.post('/api/v2/chat/canales/:id/miembros', authGuard, async (req, res) => {
 app.get('/api/v2/chat/canales/:id/mensajes', authGuard, async (req, res) => {
     const { limit = 100, before } = req.query;
 
-    // Verificar que el usuario es miembro del canal
     const { data: membership } = await supabaseAdmin
         .from('chat_canales_miembros')
         .select('canal_id')
@@ -1195,7 +1242,7 @@ app.get('/api/v2/chat/canales/:id/mensajes', authGuard, async (req, res) => {
     let query = supabaseAdmin
         .from('chat_mensajes')
         .select(`
-            id, contenido, ticket_ref_id, created_at, user_id,
+            id, contenido, ticket_ref_id, anclado, editado, created_at, user_id,
             chat_mensajes_archivos(id, nombre_original, mime_type, tamanio)
         `)
         .eq('canal_id', req.params.id)
@@ -1207,7 +1254,6 @@ app.get('/api/v2/chat/canales/:id/mensajes', authGuard, async (req, res) => {
     const { data, error } = await query;
     if (error) return res.status(500).json({ error: error.message });
 
-    // Resolver nombres de usuarios
     const userIds = [...new Set(data.map(m => m.user_id))];
     let profileMap = {};
     if (userIds.length) {
@@ -1216,7 +1262,7 @@ app.get('/api/v2/chat/canales/:id/mensajes', authGuard, async (req, res) => {
         perfiles?.forEach(p => { profileMap[p.id] = p.nombre; });
     }
 
-    // Resolver referencias a tickets
+    // Resolver referencias a tickets — se devuelven como campo "tickets"
     const ticketRefIds = [...new Set(data.map(m => m.ticket_ref_id).filter(Boolean))];
     let ticketMap = {};
     if (ticketRefIds.length) {
@@ -1251,7 +1297,6 @@ app.post('/api/v2/chat/canales/:id/mensajes', authGuard, (req, res, next) => {
         return res.status(400).json({ error: 'El mensaje debe tener contenido o archivos.' });
     }
 
-    // Verificar membresía
     const { data: membership } = await supabaseAdmin
         .from('chat_canales_miembros')
         .select('canal_id')
@@ -1261,7 +1306,6 @@ app.post('/api/v2/chat/canales/:id/mensajes', authGuard, (req, res, next) => {
 
     if (!membership) return res.status(403).json({ error: 'No eres miembro de este canal.' });
 
-    // Crear mensaje
     const { data: mensaje, error: mensajeError } = await supabaseAdmin
         .from('chat_mensajes')
         .insert({
@@ -1269,13 +1313,14 @@ app.post('/api/v2/chat/canales/:id/mensajes', authGuard, (req, res, next) => {
             user_id:       req.user.id,
             contenido:     contenido || '',
             ticket_ref_id: ticket_ref_id || null,
+            anclado:       false,
+            editado:       false,
         })
-        .select('id, contenido, ticket_ref_id, created_at, user_id')
+        .select('id, contenido, ticket_ref_id, anclado, editado, created_at, user_id')
         .single();
 
     if (mensajeError) return res.status(500).json({ error: mensajeError.message });
 
-    // Subir archivos
     const archivosGuardados = [];
     for (const file of files) {
         try {
@@ -1306,7 +1351,6 @@ app.post('/api/v2/chat/canales/:id/mensajes', authGuard, (req, res, next) => {
         }
     }
 
-    // Resolver ticket referenciado si existe
     let ticketRef = null;
     if (ticket_ref_id) {
         const { data: t } = await supabaseAdmin
@@ -1318,8 +1362,57 @@ app.post('/api/v2/chat/canales/:id/mensajes', authGuard, (req, res, next) => {
         ...mensaje,
         chat_mensajes_archivos: archivosGuardados,
         profiles: { id: req.user.id, nombre: req.user.nombre || req.user.email },
-        tickets:  ticketRef,
+        tickets:  ticketRef,  // ← Consistente con GET
     });
+});
+
+// ============================================
+// NUEVA RUTA: Editar mensaje (PATCH)
+// ============================================
+app.patch('/api/v2/chat/mensajes/:mensajeId', authGuard, async (req, res) => {
+    const { contenido } = req.body;
+    if (!contenido?.trim()) {
+        return res.status(400).json({ error: 'El contenido no puede estar vacío.' });
+    }
+
+    // Verificar que el mensaje pertenece al usuario
+    const { data: mensaje } = await supabaseAdmin
+        .from('chat_mensajes').select('user_id').eq('id', req.params.mensajeId).single();
+
+    if (!mensaje) return res.status(404).json({ error: 'Mensaje no encontrado.' });
+    if (mensaje.user_id !== req.user.id) {
+        return res.status(403).json({ error: 'Solo puedes editar tus propios mensajes.' });
+    }
+
+    const { data, error } = await supabaseAdmin
+        .from('chat_mensajes')
+        .update({ contenido: contenido.trim(), editado: true })
+        .eq('id', req.params.mensajeId)
+        .select('id, contenido, editado, anclado, created_at, user_id')
+        .single();
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+});
+
+// ============================================
+// NUEVA RUTA: Anclar/desanclar mensaje (PATCH /pin)
+// ============================================
+app.patch('/api/v2/chat/mensajes/:mensajeId/pin', authGuard, async (req, res) => {
+    const { anclado } = req.body;
+    if (typeof anclado !== 'boolean') {
+        return res.status(400).json({ error: 'El campo "anclado" debe ser booleano.' });
+    }
+
+    const { data, error } = await supabaseAdmin
+        .from('chat_mensajes')
+        .update({ anclado })
+        .eq('id', req.params.mensajeId)
+        .select('id, anclado')
+        .single();
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
 });
 
 // Eliminar mensaje
@@ -1332,7 +1425,6 @@ app.delete('/api/v2/chat/mensajes/:mensajeId', authGuard, async (req, res) => {
         return res.status(403).json({ error: 'Sin permisos para eliminar este mensaje.' });
     }
 
-    // Eliminar archivos del storage
     const { data: archivos } = await supabaseAdmin
         .from('chat_mensajes_archivos').select('nombre_storage').eq('mensaje_id', req.params.mensajeId);
     if (archivos?.length) {
@@ -1343,7 +1435,9 @@ app.delete('/api/v2/chat/mensajes/:mensajeId', authGuard, async (req, res) => {
     res.json({ ok: true });
 });
 
-// URL firmada para archivo de chat
+// ============================================
+// NUEVA RUTA: URL firmada para archivo de chat
+// ============================================
 app.get('/api/v2/chat/archivos/:archivoId/url', authGuard, async (req, res) => {
     const { data: archivo, error } = await supabaseAdmin
         .from('chat_mensajes_archivos')
