@@ -4,10 +4,11 @@
 // ============================================
 
 require('dotenv').config();
-const express = require('express');
-const cors    = require('cors');
-const multer  = require('multer');
-const path    = require('path');
+const express  = require('express');
+const cors     = require('cors');
+const multer   = require('multer');
+const path     = require('path');
+const nodemailer = require('nodemailer');
 const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
@@ -21,8 +22,6 @@ const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
     fileFilter: (req, file, cb) => {
-        // El nombre correcto llega en file_names. restoreFileNames() lo aplica después.
-
         const allowed = [
             'image/jpeg', 'image/png', 'image/gif', 'image/webp',
             'application/pdf',
@@ -44,8 +43,6 @@ const upload = multer({
 });
 
 // ── Helper: restaurar nombres reales desde el campo file_names ────────────────
-// El frontend envía file_names como JSON array con los nombres originales UTF-8.
-// Si viene ese campo, lo usamos; si no, usamos el originalname de multer.
 function restoreFileNames(files, req) {
     let fileNames = null;
     try {
@@ -74,6 +71,160 @@ app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+// ============================================
+// NODEMAILER — TRANSPORTER
+// Variables .env necesarias:
+//   EMAIL_HOST=smtp.gmail.com
+//   EMAIL_PORT=587
+//   EMAIL_USER=tucorreo@gmail.com
+//   EMAIL_PASS=tu_contraseña_de_aplicacion
+//   EMAIL_FROM="Hola Informática <tucorreo@gmail.com>"
+//   FRONTEND_URL=http://localhost:5173
+// ============================================
+const emailTransporter = nodemailer.createTransport({
+    host:   process.env.EMAIL_HOST || 'smtp.gmail.com',
+    port:   parseInt(process.env.EMAIL_PORT || '587'),
+    secure: process.env.EMAIL_PORT === '465',
+    auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+    },
+});
+
+emailTransporter.verify((err) => {
+    if (err) console.warn('[Email] Transporter no disponible:', err.message);
+    else     console.log('[Email] Transporter listo ✓');
+});
+
+async function enviarEmailAsignacion({ operario, ticket, empresa }) {
+    if (!operario.email) return;
+
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const ticketUrl   = `${frontendUrl}/tickets`;
+
+    const prioridadColor = {
+        Urgente: '#dc2626',
+        Alta:    '#d97706',
+        Media:   '#2563eb',
+        Baja:    '#059669',
+    }[ticket.prioridad] || '#64748b';
+
+    const html = `
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin:0;padding:0;background:#f1f5f9;font-family:'Segoe UI',Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;padding:32px 0;">
+    <tr><td align="center">
+      <table width="580" cellpadding="0" cellspacing="0" style="background:white;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
+
+        <!-- HEADER -->
+        <tr>
+          <td style="background:linear-gradient(135deg,#0047b3 0%,#0066ff 100%);padding:28px 32px;">
+            <table width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td>
+                  <p style="margin:0;color:rgba(255,255,255,0.8);font-size:13px;text-transform:uppercase;letter-spacing:1px;">Sistema de Tickets</p>
+                  <h1 style="margin:6px 0 0;color:white;font-size:22px;font-weight:700;">Hola Informática</h1>
+                </td>
+                <td align="right">
+                  <div style="background:rgba(255,255,255,0.15);border-radius:8px;padding:10px 16px;">
+                    <span style="color:white;font-size:22px;">🎫</span>
+                  </div>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+        <!-- CUERPO -->
+        <tr>
+          <td style="padding:32px;">
+            <p style="margin:0 0 6px;color:#64748b;font-size:14px;">Hola, <strong style="color:#1e293b;">${operario.nombre || operario.email}</strong></p>
+            <h2 style="margin:0 0 24px;color:#1e293b;font-size:18px;font-weight:600;">Se te ha asignado un nuevo ticket</h2>
+
+            <!-- TICKET CARD -->
+            <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;margin-bottom:24px;">
+              <div style="background:#0047b3;padding:10px 20px;">
+                <span style="background:rgba(255,255,255,0.2);color:white;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:700;">#${ticket.numero}</span>
+              </div>
+              <div style="padding:20px;">
+                <p style="margin:0 0 4px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Asunto</p>
+                <p style="margin:0 0 18px;color:#1e293b;font-size:16px;font-weight:600;">${ticket.asunto}</p>
+
+                <table width="100%" cellpadding="0" cellspacing="0">
+                  <tr>
+                    <td width="50%" style="padding-bottom:12px;">
+                      <p style="margin:0 0 3px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Empresa</p>
+                      <p style="margin:0;color:#1e293b;font-size:13px;font-weight:500;">🏢 ${empresa || '—'}</p>
+                    </td>
+                    <td width="50%" style="padding-bottom:12px;">
+                      <p style="margin:0 0 3px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Prioridad</p>
+                      <p style="margin:0;">
+                        <span style="background:${prioridadColor}18;color:${prioridadColor};padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600;">${ticket.prioridad}</span>
+                      </p>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td width="50%">
+                      <p style="margin:0 0 3px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Estado</p>
+                      <p style="margin:0;color:#1e293b;font-size:13px;font-weight:500;">📋 ${ticket.estado}</p>
+                    </td>
+                    <td width="50%">
+                      <p style="margin:0 0 3px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Fecha</p>
+                      <p style="margin:0;color:#1e293b;font-size:13px;font-weight:500;">📅 ${new Date(ticket.created_at).toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
+                    </td>
+                  </tr>
+                </table>
+
+                ${ticket.descripcion ? `
+                <div style="margin-top:16px;padding-top:16px;border-top:1px solid #e2e8f0;">
+                  <p style="margin:0 0 6px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Descripción</p>
+                  <p style="margin:0;color:#475569;font-size:13px;line-height:1.6;">${ticket.descripcion}</p>
+                </div>` : ''}
+              </div>
+            </div>
+
+            <!-- CTA -->
+            <div style="text-align:center;margin-bottom:24px;">
+              <a href="${ticketUrl}" style="display:inline-block;background:linear-gradient(135deg,#0047b3,#0066ff);color:white;text-decoration:none;padding:13px 32px;border-radius:8px;font-weight:600;font-size:15px;">
+                Ver ticket →
+              </a>
+            </div>
+
+            <p style="margin:0;color:#94a3b8;font-size:12px;text-align:center;line-height:1.6;">
+              Este correo fue enviado automáticamente porque se te asignó este ticket.<br>
+              Si crees que es un error, contacta con tu administrador.
+            </p>
+          </td>
+        </tr>
+
+        <!-- FOOTER -->
+        <tr>
+          <td style="background:#f8fafc;padding:16px 32px;border-top:1px solid #e2e8f0;">
+            <p style="margin:0;color:#94a3b8;font-size:12px;text-align:center;">
+              © ${new Date().getFullYear()} Hola Informática · Sistema de gestión de tickets
+            </p>
+          </td>
+        </tr>
+
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+
+    await emailTransporter.sendMail({
+        from:    process.env.EMAIL_FROM || process.env.EMAIL_USER,
+        to:      operario.email,
+        subject: `🎫 Ticket #${ticket.numero} asignado: ${ticket.asunto}`,
+        html,
+    });
+}
 
 // ============================================
 // HEALTH CHECK
@@ -130,6 +281,8 @@ function calcularHorasTranscurridas(ticket) {
         fechaFin = new Date(ticket.invoiced_at);
     } else if (ticket.estado === 'Completado' && ticket.completed_at) {
         fechaFin = new Date(ticket.completed_at);
+    } else if (ticket.estado === 'Pendiente de facturar' && ticket.completed_at) {
+        fechaFin = new Date(ticket.completed_at);
     } else {
         fechaFin = new Date();
     }
@@ -139,6 +292,30 @@ function calcularHorasTranscurridas(ticket) {
 
 const STORAGE_BUCKET      = process.env.STORAGE_BUCKET      || 'ticket-archivos';
 const CHAT_STORAGE_BUCKET = process.env.CHAT_STORAGE_BUCKET || 'chat-archivos';
+
+// ── Helper: obtener perfiles con email desde auth.users ───────────────────────
+// profiles no tiene columna email — el email vive en auth.users.
+// Usamos listUsers() y cruzamos por id.
+async function getPerfilesConEmail(ids) {
+    if (!ids?.length) return [];
+
+    const { data: perfiles } = await supabaseAdmin
+        .from('profiles')
+        .select('id, nombre, rol')
+        .in('id', ids);
+
+    if (!perfiles?.length) return [];
+
+    // Obtener emails desde auth.users (service_role tiene acceso)
+    const { data: authData } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 });
+    const emailMap = {};
+    authData?.users?.forEach(u => { emailMap[u.id] = u.email; });
+
+    return perfiles.map(p => ({
+        ...p,
+        email: emailMap[p.id] || null,
+    }));
+}
 
 // ============================================
 // AUTH
@@ -303,9 +480,10 @@ app.post('/api/tickets', authGuard, async (req, res) => {
 app.put('/api/tickets/:id', authGuard, async (req, res) => {
     const { estado } = req.body;
     const updates = { ...req.body };
-    if (estado === 'En curso')   updates.started_at   = updates.started_at   || new Date().toISOString();
-    if (estado === 'Completado') updates.completed_at = updates.completed_at || new Date().toISOString();
-    if (estado === 'Facturado')  updates.invoiced_at  = updates.invoiced_at  || new Date().toISOString();
+    if (estado === 'En curso')                updates.started_at   = updates.started_at   || new Date().toISOString();
+    if (estado === 'Completado')              updates.completed_at = updates.completed_at || new Date().toISOString();
+    if (estado === 'Pendiente de facturar')   updates.completed_at = updates.completed_at || new Date().toISOString();
+    if (estado === 'Facturado')               updates.invoiced_at  = updates.invoiced_at  || new Date().toISOString();
     const { data, error } = await supabaseAdmin
         .from('tickets_v2').update(updates).eq('id', req.params.id).select().single();
     if (error) return res.status(500).json({ error: error.message });
@@ -482,10 +660,25 @@ app.post('/api/v2/tickets', authGuard, async (req, res) => {
         await supabaseAdmin.from('ticket_asignaciones').insert(
             operarios.map(uid => ({ ticket_id: ticket.id, user_id: uid, asignado_by: req.user.id }))
         );
-        const { data: perfiles } = await supabaseAdmin
-            .from('profiles').select('id, nombre').in('id', operarios);
+        const perfiles = await getPerfilesConEmail(operarios);
         const nombres = perfiles?.map(p => p.nombre).join(', ') || operarios.join(', ');
         await registrarHistorial(ticket.id, req.user.id, 'asignacion', `Asignado a: ${nombres}`, { operarios });
+
+        // Obtener empresa para el email
+        const { data: empresaData } = await supabaseAdmin
+            .from('empresas').select('nombre').eq('id', empresa_id).single();
+
+        // Enviar email a cada operario asignado
+        if (perfiles?.length) {
+            const results = await Promise.allSettled(
+                perfiles.map(op => enviarEmailAsignacion({ operario: op, ticket, empresa: empresaData?.nombre || '' }))
+            );
+            results.forEach((r, i) => {
+                if (r.status === 'rejected') {
+                    console.warn(`[Email] Fallo enviando a ${perfiles[i]?.nombre}:`, r.reason?.message);
+                }
+            });
+        }
     }
 
     res.status(201).json(ticket);
@@ -506,9 +699,10 @@ app.put('/api/v2/tickets/:id', authGuard, async (req, res) => {
 
     if (estado && estado !== old.estado) {
         updates.estado = estado;
-        if (estado === 'En curso'   && !old.started_at)   updates.started_at   = new Date().toISOString();
-        if (estado === 'Completado' && !old.completed_at) updates.completed_at = new Date().toISOString();
-        if (estado === 'Facturado'  && !old.invoiced_at)  updates.invoiced_at  = new Date().toISOString();
+        if (estado === 'En curso'                && !old.started_at)   updates.started_at   = new Date().toISOString();
+        if (estado === 'Completado'              && !old.completed_at) updates.completed_at = new Date().toISOString();
+        if (estado === 'Pendiente de facturar'   && !old.completed_at) updates.completed_at = new Date().toISOString();
+        if (estado === 'Facturado'               && !old.invoiced_at)  updates.invoiced_at  = new Date().toISOString();
         await registrarHistorial(
             req.params.id, req.user.id, 'estado',
             `Estado cambiado: "${old.estado}" → "${estado}"`,
@@ -537,7 +731,7 @@ app.delete('/api/v2/tickets/:id', authGuard, adminGuard, async (req, res) => {
 });
 
 // ============================================
-// TICKETS V2 — ASIGNACIONES
+// TICKETS V2 — ASIGNACIONES + EMAIL
 // ============================================
 app.post('/api/v2/tickets/:id/asignaciones', authGuard, async (req, res) => {
     const { operarios } = req.body;
@@ -569,6 +763,33 @@ app.post('/api/v2/tickets/:id/asignaciones', authGuard, async (req, res) => {
             `${req.user.nombre || req.user.email} asignó a: ${nombres}`,
             { nuevos_operarios: nuevos, nombres }
         );
+    }
+
+    // Enviar email a los nuevos operarios asignados
+    if (nuevos.length > 0) {
+        try {
+            const { data: ticket } = await supabaseAdmin
+                .from('tickets_v2')
+                .select('id, numero, asunto, descripcion, prioridad, estado, created_at, empresa_id, empresas(nombre)')
+                .eq('id', ticketId)
+                .single();
+
+            const nuevosPerfiles = await getPerfilesConEmail(nuevos);
+
+            if (ticket && nuevosPerfiles?.length) {
+                const empresa = ticket.empresas?.nombre || '';
+                const emailResults = await Promise.allSettled(
+                    nuevosPerfiles.map(op => enviarEmailAsignacion({ operario: op, ticket, empresa }))
+                );
+                emailResults.forEach((r, i) => {
+                    if (r.status === 'rejected') {
+                        console.warn(`[Email] Fallo enviando a ${nuevosPerfiles[i]?.nombre}:`, r.reason?.message);
+                    }
+                });
+            }
+        } catch (emailErr) {
+            console.warn('[Email] Error general en envío de asignación:', emailErr.message);
+        }
     }
 
     const { data, error } = await supabaseAdmin
@@ -690,7 +911,6 @@ app.post('/api/v2/tickets/:id/comentarios', authGuard, (req, res, next) => {
     });
 }, async (req, res) => {
     const contenido = req.body.contenido?.trim() || '';
-    // FIX: restaurar nombres reales desde file_names
     const files = restoreFileNames(req.files || [], req);
 
     if (!contenido && !files.length) {
@@ -808,7 +1028,6 @@ app.post('/api/v2/tickets/:id/archivos', authGuard, (req, res, next) => {
         next();
     });
 }, async (req, res) => {
-    // FIX: restaurar nombres reales desde file_names
     const files = restoreFileNames(req.files || [], req);
     if (!files?.length) return res.status(400).json({ error: 'No se han enviado archivos.' });
 
@@ -959,13 +1178,14 @@ app.get('/api/v2/estadisticas/resumen', authGuard, adminGuard, async (req, res) 
     const hace7dias = new Date(now - 7 * 86400000);
 
     res.json({
-        total:          data.length,
-        pendientes:     data.filter(t => t.estado === 'Pendiente').length,
-        en_curso:       data.filter(t => t.estado === 'En curso').length,
-        completados:    data.filter(t => t.estado === 'Completado').length,
-        facturados:     data.filter(t => t.estado === 'Facturado').length,
-        urgentes:       data.filter(t => t.prioridad === 'Urgente').length,
-        ultimos_7_dias: data.filter(t => new Date(t.created_at) >= hace7dias).length,
+        total:                 data.length,
+        pendientes:            data.filter(t => t.estado === 'Pendiente').length,
+        en_curso:              data.filter(t => t.estado === 'En curso').length,
+        completados:           data.filter(t => t.estado === 'Completado').length,
+        pendiente_facturar:    data.filter(t => t.estado === 'Pendiente de facturar').length,
+        facturados:            data.filter(t => t.estado === 'Facturado').length,
+        urgentes:              data.filter(t => t.prioridad === 'Urgente').length,
+        ultimos_7_dias:        data.filter(t => new Date(t.created_at) >= hace7dias).length,
     });
 });
 
@@ -997,14 +1217,20 @@ app.get('/api/v2/estadisticas/operarios', authGuard, adminGuard, async (req, res
     tickets?.forEach(ticket => {
         ticket.ticket_asignaciones?.forEach(a => {
             if (!map[a.user_id]) {
-                map[a.user_id] = { id: a.user_id, nombre: profileMap[a.user_id] || '?', tickets_totales: 0, tickets_completados: 0, tickets_pendientes: 0, horas_totales: 0, tiempos_resolucion: [] };
+                map[a.user_id] = {
+                    id: a.user_id, nombre: profileMap[a.user_id] || '?',
+                    tickets_totales: 0, tickets_completados: 0, tickets_pendientes: 0,
+                    horas_totales: 0, tiempos_resolucion: [],
+                };
             }
             map[a.user_id].tickets_totales++;
-            if (['Completado', 'Facturado'].includes(ticket.estado)) {
+            if (['Completado', 'Pendiente de facturar', 'Facturado'].includes(ticket.estado)) {
                 map[a.user_id].tickets_completados++;
                 const fechaCierre = ticket.invoiced_at || ticket.completed_at;
                 if (ticket.created_at && fechaCierre) {
-                    map[a.user_id].tiempos_resolucion.push((new Date(fechaCierre) - new Date(ticket.created_at)) / 3600000);
+                    map[a.user_id].tiempos_resolucion.push(
+                        (new Date(fechaCierre) - new Date(ticket.created_at)) / 3600000
+                    );
                 }
             }
         });
@@ -1042,14 +1268,19 @@ app.get('/api/v2/estadisticas/empresas', authGuard, adminGuard, async (req, res)
     const map = {};
     data?.forEach(t => {
         if (!map[t.empresa_id]) {
-            map[t.empresa_id] = { id: t.empresa_id, nombre: t.empresas?.nombre, total: 0, pendientes: 0, en_curso: 0, completados: 0, facturados: 0, urgentes: 0 };
+            map[t.empresa_id] = {
+                id: t.empresa_id, nombre: t.empresas?.nombre,
+                total: 0, pendientes: 0, en_curso: 0, completados: 0,
+                pendiente_facturar: 0, facturados: 0, urgentes: 0,
+            };
         }
         map[t.empresa_id].total++;
-        if (t.estado === 'Pendiente')  map[t.empresa_id].pendientes++;
-        if (t.estado === 'En curso')   map[t.empresa_id].en_curso++;
-        if (t.estado === 'Completado') map[t.empresa_id].completados++;
-        if (t.estado === 'Facturado')  map[t.empresa_id].facturados++;
-        if (t.prioridad === 'Urgente') map[t.empresa_id].urgentes++;
+        if (t.estado === 'Pendiente')              map[t.empresa_id].pendientes++;
+        if (t.estado === 'En curso')               map[t.empresa_id].en_curso++;
+        if (t.estado === 'Completado')             map[t.empresa_id].completados++;
+        if (t.estado === 'Pendiente de facturar')  map[t.empresa_id].pendiente_facturar++;
+        if (t.estado === 'Facturado')              map[t.empresa_id].facturados++;
+        if (t.prioridad === 'Urgente')             map[t.empresa_id].urgentes++;
     });
 
     res.json(Object.values(map).sort((a, b) => b.total - a.total));
@@ -1058,7 +1289,6 @@ app.get('/api/v2/estadisticas/empresas', authGuard, adminGuard, async (req, res)
 // ============================================
 // CHAT — CANALES
 // ============================================
-
 app.get('/api/v2/chat/canales', authGuard, async (req, res) => {
     const { data: memberships, error: memberError } = await supabaseAdmin
         .from('chat_canales_miembros')
@@ -1119,7 +1349,6 @@ app.post('/api/v2/chat/canales', authGuard, async (req, res) => {
     }
 
     const miembrosInsert = [{ canal_id: canal.id, user_id: req.user.id, rol: 'admin' }];
-
     if (miembros?.length) {
         miembros.forEach(uid => {
             if (uid !== req.user.id) {
@@ -1145,10 +1374,7 @@ app.put('/api/v2/chat/canales/:id', authGuard, adminGuard, async (req, res) => {
 
     const { data: canal, error: canalError } = await supabaseAdmin
         .from('chat_canales')
-        .update({
-            nombre:      nombre.toLowerCase().replace(/\s+/g, '-'),
-            descripcion: descripcion || null,
-        })
+        .update({ nombre: nombre.toLowerCase().replace(/\s+/g, '-'), descripcion: descripcion || null })
         .eq('id', req.params.id)
         .select()
         .single();
@@ -1166,7 +1392,6 @@ app.put('/api/v2/chat/canales/:id', authGuard, adminGuard, async (req, res) => {
             const inserts = miembros
                 .filter(uid => uid !== req.user.id)
                 .map(uid => ({ canal_id: req.params.id, user_id: uid, rol: 'miembro' }));
-
             if (inserts.length > 0) {
                 await supabaseAdmin
                     .from('chat_canales_miembros')
@@ -1223,7 +1448,6 @@ app.post('/api/v2/chat/canales/:id/miembros', authGuard, async (req, res) => {
     if (!miembros?.length) return res.status(400).json({ error: 'Debes proporcionar al menos un miembro.' });
 
     const inserts = miembros.map(uid => ({ canal_id: req.params.id, user_id: uid, rol: 'miembro' }));
-
     const { error } = await supabaseAdmin
         .from('chat_canales_miembros')
         .upsert(inserts, { onConflict: 'canal_id,user_id' });
@@ -1295,10 +1519,9 @@ app.post('/api/v2/chat/canales/:id/mensajes', authGuard, (req, res, next) => {
         next();
     });
 }, async (req, res) => {
-    const contenido      = req.body.contenido?.trim() || '';
-    const ticket_ref_id  = req.body.ticket_ref_id || null;
-    // FIX: restaurar nombres reales desde file_names
-    const files          = restoreFileNames(req.files || [], req);
+    const contenido     = req.body.contenido?.trim() || '';
+    const ticket_ref_id = req.body.ticket_ref_id || null;
+    const files         = restoreFileNames(req.files || [], req);
 
     if (!contenido && !files.length) {
         return res.status(400).json({ error: 'El mensaje debe tener contenido o archivos.' });
