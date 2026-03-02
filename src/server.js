@@ -118,96 +118,93 @@ async function enviarEmailAsignacion({ operario, ticket, empresa }) {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
 <body style="margin:0;padding:0;background:#f1f5f9;font-family:'Segoe UI',Arial,sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;padding:32px 0;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;padding:40px 0;">
     <tr><td align="center">
-      <table width="580" cellpadding="0" cellspacing="0" style="background:white;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
+      <table width="560" cellpadding="0" cellspacing="0" style="background:white;border-radius:16px;overflow:hidden;box-shadow:0 2px 16px rgba(0,0,0,0.07);">
 
         <!-- HEADER -->
         <tr>
-          <td style="background:linear-gradient(135deg,#0047b3 0%,#0066ff 100%);padding:28px 32px;">
-            <table width="100%" cellpadding="0" cellspacing="0">
-              <tr>
-                <td>
-                  <p style="margin:0;color:rgba(255,255,255,0.8);font-size:13px;text-transform:uppercase;letter-spacing:1px;">Sistema de Tickets</p>
-                  <h1 style="margin:6px 0 0;color:white;font-size:22px;font-weight:700;">Hola Informática</h1>
-                </td>
-                <td align="right">
-                  <div style="background:rgba(255,255,255,0.15);border-radius:8px;padding:10px 16px;">
-                    <span style="color:white;font-size:22px;">🎫</span>
-                  </div>
-                </td>
-              </tr>
-            </table>
+          <td style="background:#0047b3;padding:32px 40px;">
+            <p style="margin:0;color:rgba(255,255,255,0.65);font-size:12px;text-transform:uppercase;letter-spacing:1.5px;font-weight:600;">Sistema de Tickets</p>
+            <h1 style="margin:8px 0 0;color:white;font-size:26px;font-weight:700;letter-spacing:-0.5px;">Hola Informática</h1>
+          </td>
+        </tr>
+
+        <!-- FRANJA TICKET -->
+        <tr>
+          <td style="background:#e8f0fe;padding:14px 40px;">
+            <p style="margin:0;color:#0047b3;font-size:13px;font-weight:600;">
+              Nuevo ticket asignado &nbsp;·&nbsp; <span style="font-weight:800;">#${ticket.numero}</span>
+            </p>
           </td>
         </tr>
 
         <!-- CUERPO -->
         <tr>
-          <td style="padding:32px;">
-            <p style="margin:0 0 6px;color:#64748b;font-size:14px;">Hola, <strong style="color:#1e293b;">${operario.nombre || operario.email}</strong></p>
-            <h2 style="margin:0 0 24px;color:#1e293b;font-size:18px;font-weight:600;">Se te ha asignado un nuevo ticket</h2>
+          <td style="padding:36px 40px 28px;">
+            <p style="margin:0 0 4px;color:#64748b;font-size:14px;">Hola, <strong style="color:#1e293b;">${operario.nombre || operario.email}</strong></p>
+            <p style="margin:0 0 28px;color:#475569;font-size:14px;line-height:1.6;">Se te ha asignado el siguiente ticket. Accede al sistema para ver todos los detalles y comenzar a trabajar en él.</p>
 
-            <!-- TICKET CARD -->
-            <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;margin-bottom:24px;">
-              <div style="background:#0047b3;padding:10px 20px;">
-                <span style="background:rgba(255,255,255,0.2);color:white;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:700;">#${ticket.numero}</span>
-              </div>
-              <div style="padding:20px;">
-                <p style="margin:0 0 4px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Asunto</p>
-                <p style="margin:0 0 18px;color:#1e293b;font-size:16px;font-weight:600;">${ticket.asunto}</p>
-
-                <table width="100%" cellpadding="0" cellspacing="0">
-                  <tr>
-                    <td width="50%" style="padding-bottom:12px;">
-                      <p style="margin:0 0 3px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Empresa</p>
-                      <p style="margin:0;color:#1e293b;font-size:13px;font-weight:500;">🏢 ${empresa || '—'}</p>
-                    </td>
-                    <td width="50%" style="padding-bottom:12px;">
-                      <p style="margin:0 0 3px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Prioridad</p>
-                      <p style="margin:0;">
-                        <span style="background:${prioridadColor}18;color:${prioridadColor};padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600;">${ticket.prioridad}</span>
-                      </p>
-                    </td>
-                  </tr>
-                  <tr>
-                    <td width="50%">
-                      <p style="margin:0 0 3px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Estado</p>
-                      <p style="margin:0;color:#1e293b;font-size:13px;font-weight:500;">📋 ${ticket.estado}</p>
-                    </td>
-                    <td width="50%">
-                      <p style="margin:0 0 3px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Fecha</p>
-                      <p style="margin:0;color:#1e293b;font-size:13px;font-weight:500;">📅 ${new Date(ticket.created_at).toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
-                    </td>
-                  </tr>
-                </table>
-
-                ${ticket.descripcion ? `
-                <div style="margin-top:16px;padding-top:16px;border-top:1px solid #e2e8f0;">
-                  <p style="margin:0 0 6px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Descripción</p>
-                  <p style="margin:0;color:#475569;font-size:13px;line-height:1.6;">${ticket.descripcion}</p>
-                </div>` : ''}
-              </div>
+            <!-- ASUNTO destacado -->
+            <div style="border-left:4px solid #0047b3;padding:14px 18px;background:#f8fafc;border-radius:0 8px 8px 0;margin-bottom:24px;">
+              <p style="margin:0 0 4px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:0.8px;font-weight:600;">Asunto</p>
+              <p style="margin:0;color:#1e293b;font-size:16px;font-weight:700;line-height:1.4;">${ticket.asunto}</p>
             </div>
+
+            <!-- GRID DE DATOS -->
+            <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px;">
+              <tr>
+                <td width="50%" style="padding:0 12px 16px 0;vertical-align:top;">
+                  <p style="margin:0 0 4px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:0.8px;font-weight:600;">Empresa</p>
+                  <p style="margin:0;color:#1e293b;font-size:14px;font-weight:500;">${empresa || '—'}</p>
+                </td>
+                <td width="50%" style="padding:0 0 16px 12px;vertical-align:top;">
+                  <p style="margin:0 0 4px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:0.8px;font-weight:600;">Prioridad</p>
+                  <span style="display:inline-block;background:${prioridadColor};color:white;padding:3px 12px;border-radius:20px;font-size:12px;font-weight:700;">${ticket.prioridad}</span>
+                </td>
+              </tr>
+              <tr>
+                <td width="50%" style="padding:0 12px 0 0;vertical-align:top;border-top:1px solid #f1f5f9;padding-top:16px;">
+                  <p style="margin:0 0 4px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:0.8px;font-weight:600;">Estado</p>
+                  <p style="margin:0;color:#1e293b;font-size:14px;font-weight:500;">${ticket.estado}</p>
+                </td>
+                <td width="50%" style="padding:0 0 0 12px;vertical-align:top;border-top:1px solid #f1f5f9;padding-top:16px;">
+                  <p style="margin:0 0 4px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:0.8px;font-weight:600;">Fecha de creación</p>
+                  <p style="margin:0;color:#1e293b;font-size:14px;font-weight:500;">${new Date(ticket.created_at).toLocaleDateString('es-ES', { day: '2-digit', month: 'long', year: 'numeric' })}</p>
+                </td>
+              </tr>
+            </table>
+
+            ${ticket.descripcion ? `
+            <!-- DESCRIPCIÓN -->
+            <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px 18px;margin-bottom:24px;">
+              <p style="margin:0 0 6px;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:0.8px;font-weight:600;">Descripción</p>
+              <p style="margin:0;color:#475569;font-size:14px;line-height:1.7;">${ticket.descripcion}</p>
+            </div>` : ''}
 
             <!-- CTA -->
-            <div style="text-align:center;margin-bottom:24px;">
-              <a href="${ticketUrl}" style="display:inline-block;background:linear-gradient(135deg,#0047b3,#0066ff);color:white;text-decoration:none;padding:13px 32px;border-radius:8px;font-weight:600;font-size:15px;">
-                Ver ticket →
+            <div style="text-align:center;padding:8px 0 4px;">
+              <a href="${ticketUrl}" style="display:inline-block;background:#0047b3;color:white;text-decoration:none;padding:14px 40px;border-radius:8px;font-weight:700;font-size:15px;letter-spacing:0.2px;">
+                Ver ticket #${ticket.numero}
               </a>
             </div>
+          </td>
+        </tr>
 
-            <p style="margin:0;color:#94a3b8;font-size:12px;text-align:center;line-height:1.6;">
-              Este correo fue enviado automáticamente porque se te asignó este ticket.<br>
-              Si crees que es un error, contacta con tu administrador.
-            </p>
+        <!-- SEPARADOR -->
+        <tr>
+          <td style="padding:0 40px;">
+            <div style="border-top:1px solid #e2e8f0;"></div>
           </td>
         </tr>
 
         <!-- FOOTER -->
         <tr>
-          <td style="background:#f8fafc;padding:16px 32px;border-top:1px solid #e2e8f0;">
-            <p style="margin:0;color:#94a3b8;font-size:12px;text-align:center;">
-              © ${new Date().getFullYear()} Hola Informática · Sistema de gestión de tickets
+          <td style="padding:20px 40px 28px;">
+            <p style="margin:0;color:#94a3b8;font-size:12px;line-height:1.7;text-align:center;">
+              Este correo se ha enviado automáticamente porque se te asignó este ticket.<br>
+              Si crees que es un error, contacta con tu administrador.<br>
+              <span style="color:#cbd5e1;">© ${new Date().getFullYear()} Hola Informática</span>
             </p>
           </td>
         </tr>
