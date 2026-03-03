@@ -122,12 +122,22 @@ router.get('/:id', authGuard, async (req, res) => {
     data.horas_transcurridas = calcularHorasTranscurridas(data);
     data.horas_totales = (data.ticket_horas || []).reduce((s, h) => s + Number(h.horas), 0);
 
+    // Resolver dispositivos adicionales desde el array dispositivos_ids
+    const extraIds = (data.dispositivos_ids || []).filter(id => id && id !== data.dispositivo_id);
+    if (extraIds.length > 0) {
+        const { data: extraDisps } = await supabaseAdmin
+            .from('dispositivos').select('id, nombre, tipo, ip, numero_serie').in('id', extraIds);
+        data.dispositivos_extra = extraDisps || [];
+    } else {
+        data.dispositivos_extra = [];
+    }
+
     res.json(data);
 });
 
 // ── CREAR ────────────────────────────────────────────────────────────────────
 router.post('/', authGuard, async (req, res) => {
-    const { empresa_id, dispositivo_id, asunto, descripcion, prioridad, estado, operarios, notas } = req.body;
+    const { empresa_id, dispositivo_id, dispositivos_ids, asunto, descripcion, prioridad, estado, operarios, notas, telefono_cliente, contacto_nombre } = req.body;
     if (!empresa_id || !asunto) {
         return res.status(400).json({ error: 'empresa_id y asunto son obligatorios.' });
     }
@@ -137,9 +147,12 @@ router.post('/', authGuard, async (req, res) => {
         .insert({
             empresa_id,
             dispositivo_id: dispositivo_id || null,
+            dispositivos_ids: dispositivos_ids?.length ? dispositivos_ids : (dispositivo_id ? [dispositivo_id] : []),
             asunto,
             descripcion: descripcion || null,
             notas: notas || null,
+            telefono_cliente: telefono_cliente || null,
+            contacto_nombre: contacto_nombre || null,
             prioridad: prioridad || 'Media',
             estado: estado || 'Pendiente',
             created_by: req.user.id,
@@ -181,17 +194,20 @@ router.post('/', authGuard, async (req, res) => {
 
 // ── EDITAR ───────────────────────────────────────────────────────────────────
 router.put('/:id', authGuard, async (req, res) => {
-    const { estado, prioridad, asunto, descripcion, dispositivo_id, notas } = req.body;
+    const { estado, prioridad, asunto, descripcion, dispositivo_id, dispositivos_ids, notas, telefono_cliente, contacto_nombre } = req.body;
     const { data: old } = await supabaseAdmin
         .from('tickets_v2').select('*').eq('id', req.params.id).single();
     if (!old) return res.status(404).json({ error: 'Ticket no encontrado' });
 
     const updates = {};
-    if (asunto         !== undefined) updates.asunto         = asunto;
-    if (descripcion    !== undefined) updates.descripcion    = descripcion;
-    if (notas          !== undefined) updates.notas          = notas;
-    if (prioridad      !== undefined) updates.prioridad      = prioridad;
-    if (dispositivo_id !== undefined) updates.dispositivo_id = dispositivo_id;
+    if (asunto             !== undefined) updates.asunto             = asunto;
+    if (descripcion        !== undefined) updates.descripcion        = descripcion;
+    if (notas              !== undefined) updates.notas              = notas;
+    if (prioridad          !== undefined) updates.prioridad          = prioridad;
+    if (dispositivo_id     !== undefined) updates.dispositivo_id     = dispositivo_id;
+    if (dispositivos_ids   !== undefined) updates.dispositivos_ids   = dispositivos_ids;
+    if (telefono_cliente   !== undefined) updates.telefono_cliente   = telefono_cliente;
+    if (contacto_nombre    !== undefined) updates.contacto_nombre    = contacto_nombre;
 
     if (estado && estado !== old.estado) {
         updates.estado = estado;
