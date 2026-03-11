@@ -23,7 +23,7 @@ router.get('/', authGuard, adminGuard, async (req, res) => {
 });
 
 router.post('/', authGuard, adminGuard, async (req, res) => {
-    const { nombre, email, rol, password, empresa_id } = req.body;
+    const { nombre, email, rol, password, empresa_id, telefono } = req.body;
     if (!nombre || !email || !rol || !password) {
         return res.status(400).json({ error: 'Nombre, email, rol y contraseña son obligatorios.' });
     }
@@ -59,7 +59,7 @@ router.post('/', authGuard, adminGuard, async (req, res) => {
         const nuevoContacto = {
             nombre: nombre,
             email: email.toLowerCase().trim(),
-            telefono: '',
+            telefono: telefono || '',
             cargo: 'Cliente',
         };
         const nuevosContactos = [...contactosActuales, nuevoContacto];
@@ -81,7 +81,7 @@ router.post('/', authGuard, adminGuard, async (req, res) => {
 });
 
 router.put('/:id', authGuard, adminGuard, async (req, res) => {
-    const { nombre, rol, activo, empresa_id, password } = req.body;
+    const { nombre, rol, activo, empresa_id, password, telefono } = req.body;
     const updates = {};
     if (nombre     !== undefined) updates.nombre     = nombre;
     if (rol        !== undefined) updates.rol        = rol;
@@ -95,6 +95,25 @@ router.put('/:id', authGuard, adminGuard, async (req, res) => {
     // Si se cambió la contraseña
     if (password?.trim()) {
         await supabaseAdmin.auth.admin.updateUserById(req.params.id, { password: password.trim() });
+    }
+
+    // Si es cliente y se proporcionó teléfono, actualizar el contacto en la empresa
+    const efectiveEmpresaId = empresa_id !== undefined ? (empresa_id || null) : data.empresa_id;
+    if (telefono !== undefined && efectiveEmpresaId) {
+        const { data: authUser } = await supabaseAdmin.auth.admin.getUserById(req.params.id);
+        const userEmail = authUser?.user?.email;
+        if (userEmail) {
+            const { data: empresa } = await supabaseAdmin
+                .from('empresas').select('contactos').eq('id', efectiveEmpresaId).single();
+            if (empresa?.contactos) {
+                const contactos = empresa.contactos.map(c =>
+                    c.email?.toLowerCase() === userEmail.toLowerCase()
+                        ? { ...c, telefono: telefono || '' }
+                        : c
+                );
+                await supabaseAdmin.from('empresas').update({ contactos }).eq('id', efectiveEmpresaId);
+            }
+        }
     }
 
     res.json(data);

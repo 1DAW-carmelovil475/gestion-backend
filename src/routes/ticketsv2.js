@@ -177,16 +177,28 @@ router.post('/incidencia', authGuard, async (req, res) => {
     const { asunto, descripcion } = req.body;
     if (!asunto) return res.status(400).json({ error: 'El asunto es obligatorio.' });
 
+    // Buscar teléfono del cliente en los contactos de la empresa
+    let telefonoCliente = null;
+    const { data: empresaData } = await supabaseAdmin
+        .from('empresas').select('contactos').eq('id', req.user.empresa_id).single();
+    if (empresaData?.contactos && req.user.email) {
+        const contacto = empresaData.contactos.find(
+            c => c.email?.toLowerCase() === req.user.email.toLowerCase()
+        );
+        telefonoCliente = contacto?.telefono || null;
+    }
+
     const { data: ticket, error } = await supabaseAdmin
         .from('tickets_v2')
         .insert({
-            empresa_id:      req.user.empresa_id,
+            empresa_id:       req.user.empresa_id,
             asunto,
-            descripcion:     descripcion || null,
-            prioridad:       'Media',
-            estado:          'Pendiente',
-            contacto_nombre: req.user.nombre,
-            created_by:      req.user.id,
+            descripcion:      descripcion || null,
+            prioridad:        'Media',
+            estado:           'Pendiente',
+            contacto_nombre:  req.user.nombre,
+            telefono_cliente: telefonoCliente,
+            created_by:       req.user.id,
         })
         .select().single();
 
@@ -311,10 +323,10 @@ router.put('/:id', authGuard, async (req, res) => {
 
     if (estado && estado !== old.estado) {
         updates.estado = estado;
-        if (estado === 'En curso'               && !old.started_at)   updates.started_at   = new Date().toISOString();
-        if (estado === 'Completado'             && !old.completed_at) updates.completed_at = new Date().toISOString();
-        if (estado === 'Pendiente de facturar'  && !old.completed_at) updates.completed_at = new Date().toISOString();
-        if (estado === 'Facturado'              && !old.invoiced_at)  updates.invoiced_at  = new Date().toISOString();
+        if (estado === 'En curso')               updates.started_at   = old.started_at   || new Date().toISOString();
+        if (estado === 'Completado')             updates.completed_at = new Date().toISOString();
+        if (estado === 'Pendiente de facturar')  updates.completed_at = new Date().toISOString();
+        if (estado === 'Facturado')              updates.invoiced_at  = new Date().toISOString();
         await registrarHistorial(
             req.params.id, req.user.id, 'estado',
             `Estado cambiado: "${old.estado}" → "${estado}"`,

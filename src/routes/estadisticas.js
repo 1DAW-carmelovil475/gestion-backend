@@ -27,7 +27,7 @@ router.get('/operarios', authGuard, adminGuard, async (req, res) => {
     const { desde, hasta } = req.query;
     let query = supabaseAdmin
         .from('tickets_v2')
-        .select(`id, estado, prioridad, created_at, completed_at, invoiced_at, ticket_asignaciones(user_id), ticket_horas(user_id, horas)`);
+        .select(`id, estado, prioridad, created_at, completed_at, invoiced_at, ticket_asignaciones(user_id, asignado_at)`);
     if (desde) query = query.gte('created_at', desde);
     if (hasta) query = query.lte('created_at', hasta + 'T23:59:59');
 
@@ -47,29 +47,38 @@ router.get('/operarios', authGuard, adminGuard, async (req, res) => {
     const profileMap = {};
     perfiles?.forEach(p => { profileMap[p.id] = p.nombre; });
 
+    const now = new Date();
+    const ESTADOS_CERRADO = ['Completado', 'Pendiente de facturar', 'Facturado'];
     const map = {};
     tickets?.forEach(ticket => {
+        const esCerrado = ESTADOS_CERRADO.includes(ticket.estado);
+        const fechaCierre = ticket.invoiced_at || ticket.completed_at;
+        const closeTime = esCerrado ? (fechaCierre ? new Date(fechaCierre) : null) : now;
+
         ticket.ticket_asignaciones?.forEach(a => {
             if (!map[a.user_id]) {
                 map[a.user_id] = {
                     id: a.user_id, nombre: profileMap[a.user_id] || '?',
                     tickets_totales: 0, tickets_completados: 0, tickets_pendientes: 0,
-                    horas_totales: 0, tiempos_resolucion: [],
+                    horas_por_ticket: [], tiempos_resolucion: [],
                 };
             }
             map[a.user_id].tickets_totales++;
-            if (['Completado', 'Pendiente de facturar', 'Facturado'].includes(ticket.estado)) {
+
+            // Horas automáticas: desde asignado_at hasta cierre (o ahora si sigue abierto)
+            if (a.asignado_at && closeTime) {
+                const h = (closeTime - new Date(a.asignado_at)) / 3600000;
+                if (h > 0) map[a.user_id].horas_por_ticket.push(h);
+            }
+
+            if (esCerrado) {
                 map[a.user_id].tickets_completados++;
-                const fechaCierre = ticket.invoiced_at || ticket.completed_at;
                 if (ticket.created_at && fechaCierre) {
                     map[a.user_id].tiempos_resolucion.push(
                         (new Date(fechaCierre) - new Date(ticket.created_at)) / 3600000
                     );
                 }
             }
-        });
-        ticket.ticket_horas?.forEach(h => {
-            if (map[h.user_id]) map[h.user_id].horas_totales += Number(h.horas);
         });
     });
 
@@ -82,6 +91,9 @@ router.get('/operarios', authGuard, adminGuard, async (req, res) => {
 
     res.json(Object.values(map).map(op => ({
         ...op,
+        media_horas: op.horas_por_ticket.length
+            ? op.horas_por_ticket.reduce((a, b) => a + b, 0) / op.horas_por_ticket.length
+            : null,
         tiempo_promedio_horas: op.tiempos_resolucion.length
             ? op.tiempos_resolucion.reduce((a, b) => a + b, 0) / op.tiempos_resolucion.length
             : null,
