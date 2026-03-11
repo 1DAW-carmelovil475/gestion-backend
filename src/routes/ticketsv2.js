@@ -5,7 +5,7 @@ const multer        = require('multer');
 const supabaseAdmin = require('../supabase');
 const { authGuard, adminGuard }                          = require('../middleware/auth');
 const { registrarHistorial, calcularHorasTranscurridas } = require('../helpers/historial');
-const { getPerfilesConEmail, enviarEmailAsignacion }      = require('../helpers/email');
+const { getPerfilesConEmail, enviarEmailAsignacion, enviarEmailIncidenciaGestores } = require('../helpers/email');
 const { upload, restoreFileNames }                        = require('../helpers/multer');
 
 const STORAGE_BUCKET = process.env.STORAGE_BUCKET || 'ticket-archivos';
@@ -26,11 +26,41 @@ router.get('/', authGuard, async (req, res) => {
         `)
         .order('created_at', { ascending: false });
 
-    if (estado && estado !== 'all')       query = query.eq('estado', estado);
-    if (prioridad && prioridad !== 'all') query = query.eq('prioridad', prioridad);
-    if (empresa_id)                       query = query.eq('empresa_id', empresa_id);
-    if (desde)                            query = query.gte('created_at', desde);
-    if (hasta)                            query = query.lte('created_at', hasta + 'T23:59:59');
+    // Clientes: si su empresa es filial → solo sus tickets; si es matriz → ella + filiales
+    if (req.user.rol === 'cliente') {
+        const empresaId = req.user.empresa_id;
+        let empresaIds = empresaId ? [empresaId] : [];
+
+        if (empresaId) {
+            const { data: empresa } = await supabaseAdmin
+                .from('empresas')
+                .select('id, empresa_matriz_id')
+                .eq('id', empresaId)
+                .single();
+
+            if (empresa?.empresa_matriz_id) {
+                // Es filial → solo sus propios tickets
+                empresaIds = [empresaId];
+            } else {
+                // Es matriz → sus tickets + los de todas sus filiales
+                const { data: filiales } = await supabaseAdmin
+                    .from('empresas')
+                    .select('id')
+                    .eq('empresa_matriz_id', empresaId);
+                empresaIds = [empresaId, ...(filiales?.map(e => e.id) || [])];
+            }
+        }
+
+        query = empresaIds.length
+            ? query.in('empresa_id', empresaIds)
+            : query.eq('empresa_id', null);
+    } else {
+        if (estado && estado !== 'all')       query = query.eq('estado', estado);
+        if (prioridad && prioridad !== 'all') query = query.eq('prioridad', prioridad);
+        if (empresa_id)                       query = query.eq('empresa_id', empresa_id);
+        if (desde)                            query = query.gte('created_at', desde);
+        if (hasta)                            query = query.lte('created_at', hasta + 'T23:59:59');
+    }
 
     const { data, error } = await query;
     if (error) return res.status(500).json({ error: error.message });
@@ -133,6 +163,76 @@ router.get('/:id', authGuard, async (req, res) => {
     }
 
     res.json(data);
+});
+
+// ── CREAR INCIDENCIA (CLIENTE) ────────────────────────────────────────────────
+router.post('/incidencia', authGuard, async (req, res) => {
+    if (req.user.rol !== 'cliente') {
+        return res.status(403).json({ error: 'Solo los clientes pueden usar este endpoint.' });
+    }
+    if (!req.user.empresa_id) {
+        return res.status(400).json({ error: 'Tu cuenta no tiene empresa asignada. Contacta con el administrador.' });
+    }
+
+    const { asunto, descripcion } = req.body;
+    if (!asunto) return res.status(400).json({ error: 'El asunto es obligatorio.' });
+
+    const { data: ticket, error } = await supabaseAdmin
+        .from('tickets_v2')
+        .insert({
+            empresa_id:      req.user.empresa_id,
+            asunto,
+            descripcion:     descripcion || null,
+            prioridad:       'Media',
+            estado:          'Pendiente',
+            contacto_nombre: req.user.nombre,
+            created_by:      req.user.id,
+        })
+        .select().single();
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    await registrarHistorial(
+        ticket.id, req.user.id, 'creacion',
+        `Incidencia #${ticket.numero} creada por el cliente ${req.user.nombre || req.user.email}`
+    );
+
+    // Obtener todos los gestores activos y asignarles el ticket
+    const { data: gestores } = await supabaseAdmin
+        .from('profiles')
+        .select('id')
+        .eq('rol', 'gestor')
+        .eq('activo', true);
+
+    if (gestores?.length) {
+        await supabaseAdmin.from('ticket_asignaciones').insert(
+            gestores.map(g => ({ ticket_id: ticket.id, user_id: g.id, asignado_by: req.user.id }))
+        );
+
+        const gestorIds = gestores.map(g => g.id);
+        const perfilesGestores = await getPerfilesConEmail(gestorIds);
+
+        const { data: empresaData } = await supabaseAdmin
+            .from('empresas').select('nombre').eq('id', req.user.empresa_id).single();
+
+        if (perfilesGestores?.length) {
+            const results = await Promise.allSettled(
+                perfilesGestores.map(g => enviarEmailIncidenciaGestores({
+                    gestor: g,
+                    ticket,
+                    empresa: empresaData?.nombre || '',
+                    clienteNombre: req.user.nombre || req.user.email,
+                }))
+            );
+            results.forEach((r, i) => {
+                if (r.status === 'rejected') {
+                    console.warn(`[Email] Fallo enviando a gestor ${perfilesGestores[i]?.nombre}:`, r.reason?.message);
+                }
+            });
+        }
+    }
+
+    res.status(201).json(ticket);
 });
 
 // ── CREAR ────────────────────────────────────────────────────────────────────

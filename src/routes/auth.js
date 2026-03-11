@@ -24,7 +24,7 @@ router.post('/login', async (req, res) => {
         // Obtener el perfil del usuario
         const { data: profile, error: profileError } = await supabaseAdmin
             .from('profiles')
-            .select('id, rol, activo, nombre')
+            .select('id, rol, activo, nombre, empresa_id, empresas(id, nombre)')
             .eq('id', authData.user.id)
             .single();
 
@@ -45,6 +45,8 @@ router.post('/login', async (req, res) => {
                 email: authData.user.email,
                 nombre: profile.nombre,
                 rol: profile.rol,
+                empresa_id: profile.empresa_id || null,
+                empresa_nombre: profile.empresas?.nombre || null,
             },
         });
     } catch (error) {
@@ -55,10 +57,12 @@ router.post('/login', async (req, res) => {
 
 router.get('/me', authGuard, (req, res) => {
     res.json({
-        id:     req.user.id,
-        email:  req.user.email,
-        nombre: req.user.nombre,
-        rol:    req.user.rol,
+        id:             req.user.id,
+        email:          req.user.email,
+        nombre:         req.user.nombre,
+        rol:            req.user.rol,
+        empresa_id:     req.user.empresa_id || null,
+        empresa_nombre: req.user.empresa_nombre || null,
     });
 });
 

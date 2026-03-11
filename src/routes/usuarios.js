@@ -5,7 +5,9 @@ const { authGuard, adminGuard } = require('../middleware/auth');
 
 router.get('/', authGuard, adminGuard, async (req, res) => {
     const { data: profiles, error } = await supabaseAdmin
-        .from('profiles').select('id, nombre, rol, activo, created_at').order('created_at');
+        .from('profiles')
+        .select('id, nombre, rol, activo, created_at, empresa_id, empresas(id, nombre)')
+        .order('created_at');
     if (error) return res.status(500).json({ error: error.message });
 
     const { data: authUsers, error: authError } = await supabaseAdmin.auth.admin.listUsers();
@@ -13,14 +15,22 @@ router.get('/', authGuard, adminGuard, async (req, res) => {
 
     const emailMap = {};
     authUsers.users.forEach(u => { emailMap[u.id] = u.email; });
-    res.json(profiles.map(p => ({ ...p, email: emailMap[p.id] || '—' })));
+    res.json(profiles.map(p => ({
+        ...p,
+        email: emailMap[p.id] || '—',
+        empresa_nombre: p.empresas?.nombre || null,
+    })));
 });
 
 router.post('/', authGuard, adminGuard, async (req, res) => {
-    const { nombre, email, rol, password } = req.body;
+    const { nombre, email, rol, password, empresa_id } = req.body;
     if (!nombre || !email || !rol || !password) {
         return res.status(400).json({ error: 'Nombre, email, rol y contraseña son obligatorios.' });
     }
+    if (rol === 'cliente' && !empresa_id) {
+        return res.status(400).json({ error: 'El rol cliente requiere seleccionar una empresa.' });
+    }
+
     const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
         email: email.toLowerCase().trim(),
         password,
@@ -28,27 +38,65 @@ router.post('/', authGuard, adminGuard, async (req, res) => {
         user_metadata: { nombre, rol },
     });
     if (authError) {
+        console.error('[Usuarios] Error creando auth user:', authError);
         if (authError.message.includes('already registered')) {
             return res.status(409).json({ error: 'Ya existe un usuario con ese email.' });
         }
         return res.status(500).json({ error: authError.message });
     }
-    await supabaseAdmin.from('profiles').upsert(
-        { id: authData.user.id, nombre, rol },
-        { onConflict: 'id' }
-    );
-    res.status(201).json({ id: authData.user.id, email: authData.user.email, nombre, rol, activo: true });
+
+    const profileData = { id: authData.user.id, nombre, rol };
+    if (rol === 'cliente' && empresa_id) profileData.empresa_id = empresa_id;
+
+    await supabaseAdmin.from('profiles').upsert(profileData, { onConflict: 'id' });
+
+    // Si es cliente, añadir como contacto a la empresa
+    if (rol === 'cliente' && empresa_id) {
+        const { data: empresa } = await supabaseAdmin
+            .from('empresas').select('contactos').eq('id', empresa_id).single();
+
+        const contactosActuales = empresa?.contactos || [];
+        const nuevoContacto = {
+            nombre: nombre,
+            email: email.toLowerCase().trim(),
+            telefono: '',
+            cargo: 'Cliente',
+        };
+        const nuevosContactos = [...contactosActuales, nuevoContacto];
+
+        await supabaseAdmin
+            .from('empresas')
+            .update({ contactos: nuevosContactos })
+            .eq('id', empresa_id);
+    }
+
+    res.status(201).json({
+        id: authData.user.id,
+        email: authData.user.email,
+        nombre,
+        rol,
+        activo: true,
+        empresa_id: empresa_id || null,
+    });
 });
 
 router.put('/:id', authGuard, adminGuard, async (req, res) => {
-    const { nombre, rol, activo } = req.body;
+    const { nombre, rol, activo, empresa_id, password } = req.body;
     const updates = {};
-    if (nombre !== undefined) updates.nombre = nombre;
-    if (rol    !== undefined) updates.rol    = rol;
-    if (activo !== undefined) updates.activo = activo;
+    if (nombre     !== undefined) updates.nombre     = nombre;
+    if (rol        !== undefined) updates.rol        = rol;
+    if (activo     !== undefined) updates.activo     = activo;
+    if (empresa_id !== undefined) updates.empresa_id = empresa_id || null;
+
     const { data, error } = await supabaseAdmin
         .from('profiles').update(updates).eq('id', req.params.id).select().single();
     if (error) return res.status(500).json({ error: error.message });
+
+    // Si se cambió la contraseña
+    if (password?.trim()) {
+        await supabaseAdmin.auth.admin.updateUserById(req.params.id, { password: password.trim() });
+    }
+
     res.json(data);
 });
 
