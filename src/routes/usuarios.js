@@ -6,7 +6,7 @@ const { authGuard, adminGuard } = require('../middleware/auth');
 router.get('/', authGuard, adminGuard, async (req, res) => {
     const { data: profiles, error } = await supabaseAdmin
         .from('profiles')
-        .select('id, nombre, rol, activo, created_at, empresa_id, empresas(id, nombre)')
+        .select('id, nombre, rol, activo, created_at, empresa_id, empresas(id, nombre, contactos)')
         .order('created_at');
     if (error) return res.status(500).json({ error: error.message });
 
@@ -15,11 +15,17 @@ router.get('/', authGuard, adminGuard, async (req, res) => {
 
     const emailMap = {};
     authUsers.users.forEach(u => { emailMap[u.id] = u.email; });
-    res.json(profiles.map(p => ({
-        ...p,
-        email: emailMap[p.id] || '—',
-        empresa_nombre: p.empresas?.nombre || null,
-    })));
+    res.json(profiles.map(p => {
+        const email = emailMap[p.id] || '—';
+        const contactos = p.empresas?.contactos || [];
+        const contacto = contactos.find(c => c.email?.toLowerCase() === email.toLowerCase());
+        return {
+            ...p,
+            email,
+            empresa_nombre: p.empresas?.nombre || null,
+            telefono: contacto?.telefono || '',
+        };
+    }));
 });
 
 router.post('/', authGuard, adminGuard, async (req, res) => {
