@@ -18,8 +18,31 @@ router.post('/', authGuard, async (req, res) => {
 });
 
 router.put('/:id', authGuard, async (req, res) => {
+    const empresaId = req.params.id;
+
+    // Detect removed contacts to clear their user's empresa_id
+    if (Array.isArray(req.body.contactos)) {
+        const { data: current } = await supabaseAdmin
+            .from('empresas').select('contactos').eq('id', empresaId).single();
+        const oldEmails = (current?.contactos || []).map(c => c.email?.toLowerCase()).filter(Boolean);
+        const newEmails = req.body.contactos.map(c => c.email?.toLowerCase()).filter(Boolean);
+        const removedEmails = oldEmails.filter(e => !newEmails.includes(e));
+
+        for (const email of removedEmails) {
+            const { data: authUsers } = await supabaseAdmin.auth.admin.listUsers();
+            const authUser = authUsers?.users?.find(u => u.email?.toLowerCase() === email);
+            if (authUser) {
+                await supabaseAdmin
+                    .from('profiles')
+                    .update({ empresa_id: null })
+                    .eq('id', authUser.id)
+                    .eq('empresa_id', empresaId);
+            }
+        }
+    }
+
     const { data, error } = await supabaseAdmin
-        .from('empresas').update(req.body).eq('id', req.params.id).select().single();
+        .from('empresas').update(req.body).eq('id', empresaId).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
 });

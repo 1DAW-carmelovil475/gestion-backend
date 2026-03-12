@@ -88,6 +88,11 @@ router.post('/', authGuard, adminGuard, async (req, res) => {
 
 router.put('/:id', authGuard, adminGuard, async (req, res) => {
     const { nombre, rol, activo, empresa_id, password, telefono } = req.body;
+
+    // Obtener datos actuales antes de actualizar (para detectar cambio de empresa)
+    const { data: perfilActual } = await supabaseAdmin
+        .from('profiles').select('empresa_id, nombre').eq('id', req.params.id).single();
+
     const updates = {};
     if (nombre     !== undefined) updates.nombre     = nombre;
     if (rol        !== undefined) updates.rol        = rol;
@@ -103,21 +108,52 @@ router.put('/:id', authGuard, adminGuard, async (req, res) => {
         await supabaseAdmin.auth.admin.updateUserById(req.params.id, { password: password.trim() });
     }
 
-    // Si es cliente y se proporcionó teléfono, actualizar el contacto en la empresa
-    const efectiveEmpresaId = empresa_id !== undefined ? (empresa_id || null) : data.empresa_id;
-    if (telefono !== undefined && efectiveEmpresaId) {
+    // Si cambió la empresa, mover el contacto de la empresa antigua a la nueva
+    const nuevaEmpresaId = empresa_id !== undefined ? (empresa_id || null) : data.empresa_id;
+    const viejaEmpresaId = perfilActual?.empresa_id || null;
+    const empresaCambio  = empresa_id !== undefined && nuevaEmpresaId !== viejaEmpresaId;
+
+    if (empresaCambio || telefono !== undefined) {
         const { data: authUser } = await supabaseAdmin.auth.admin.getUserById(req.params.id);
         const userEmail = authUser?.user?.email;
+
         if (userEmail) {
-            const { data: empresa } = await supabaseAdmin
-                .from('empresas').select('contactos').eq('id', efectiveEmpresaId).single();
-            if (empresa?.contactos) {
-                const contactos = empresa.contactos.map(c =>
-                    c.email?.toLowerCase() === userEmail.toLowerCase()
-                        ? { ...c, telefono: telefono || '' }
-                        : c
-                );
-                await supabaseAdmin.from('empresas').update({ contactos }).eq('id', efectiveEmpresaId);
+            const nombreContacto = nombre ?? perfilActual?.nombre;
+
+            // Eliminar de la empresa antigua
+            if (empresaCambio && viejaEmpresaId) {
+                const { data: viejaEmpresa } = await supabaseAdmin
+                    .from('empresas').select('contactos').eq('id', viejaEmpresaId).single();
+                if (viejaEmpresa?.contactos) {
+                    const contactosFiltrados = viejaEmpresa.contactos.filter(
+                        c => c.email?.toLowerCase() !== userEmail.toLowerCase()
+                    );
+                    await supabaseAdmin.from('empresas').update({ contactos: contactosFiltrados }).eq('id', viejaEmpresaId);
+                }
+            }
+
+            // Añadir o actualizar en la empresa nueva
+            if (nuevaEmpresaId) {
+                const { data: nuevaEmpresa } = await supabaseAdmin
+                    .from('empresas').select('contactos').eq('id', nuevaEmpresaId).single();
+                const contactosActuales = nuevaEmpresa?.contactos || [];
+                const idx = contactosActuales.findIndex(c => c.email?.toLowerCase() === userEmail.toLowerCase());
+                if (idx >= 0) {
+                    // Ya existe: actualizar nombre y teléfono si se proporcionaron
+                    contactosActuales[idx] = {
+                        ...contactosActuales[idx],
+                        nombre: nombreContacto || contactosActuales[idx].nombre,
+                        ...(telefono !== undefined ? { telefono: telefono || '' } : {}),
+                    };
+                } else {
+                    // No existe: añadir
+                    contactosActuales.push({
+                        nombre: nombreContacto || '',
+                        email:  userEmail,
+                        telefono: telefono !== undefined ? (telefono || '') : '',
+                    });
+                }
+                await supabaseAdmin.from('empresas').update({ contactos: contactosActuales }).eq('id', nuevaEmpresaId);
             }
         }
     }
