@@ -166,7 +166,16 @@ router.get('/:id', authGuard, async (req, res) => {
 });
 
 // ── CREAR INCIDENCIA (CLIENTE) ────────────────────────────────────────────────
-router.post('/incidencia', authGuard, async (req, res) => {
+router.post('/incidencia', authGuard, (req, res, next) => {
+    upload.array('archivos', 10)(req, res, (err) => {
+        if (err instanceof multer.MulterError) {
+            if (err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: 'Archivo supera el límite de 50MB.' });
+            return res.status(400).json({ error: err.message });
+        }
+        if (err) return res.status(400).json({ error: err.message });
+        next();
+    });
+}, async (req, res) => {
     if (req.user.rol !== 'cliente') {
         return res.status(403).json({ error: 'Solo los clientes pueden usar este endpoint.' });
     }
@@ -241,6 +250,33 @@ router.post('/incidencia', authGuard, async (req, res) => {
                     console.warn(`[Email] Fallo enviando a gestor ${perfilesGestores[i]?.nombre}:`, r.reason?.message);
                 }
             });
+        }
+    }
+
+    // Subir archivos adjuntos si los hay
+    const files = restoreFileNames(req.files || [], req);
+    for (const file of files) {
+        try {
+            const ext         = path.extname(file.originalname).toLowerCase() || '.bin';
+            const safeName    = `${Date.now()}_${Math.random().toString(36).substring(2, 11)}${ext}`;
+            const storagePath = `tickets/${ticket.id}/${safeName}`;
+
+            const { error: storageError } = await supabaseAdmin.storage
+                .from(STORAGE_BUCKET)
+                .upload(storagePath, file.buffer, { contentType: file.mimetype, upsert: false });
+
+            if (storageError) { console.error('Storage error incidencia:', storageError.message); continue; }
+
+            await supabaseAdmin.from('ticket_archivos').insert({
+                ticket_id:       ticket.id,
+                nombre_original: file.originalname,
+                storage_path:    storagePath,
+                mime_type:       file.mimetype,
+                tamanio:         file.size,
+                subido_by:       req.user.id,
+            });
+        } catch (err) {
+            console.error('Error subiendo archivo de incidencia:', err.message);
         }
     }
 
