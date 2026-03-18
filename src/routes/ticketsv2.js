@@ -402,8 +402,10 @@ router.put('/:id', authGuard, async (req, res) => {
             { de: old.estado, a: estado }
         );
 
-        // Enviar email al creador si el ticket se marca como completado
-        if (estado === 'Completado' && old.created_by) {
+        // Enviar email al creador si el ticket pasa a un estado equivalente a "Completado" para el cliente
+        const ESTADOS_COMPLETADO_CLIENTE = ['Completado', 'Pendiente de facturar', 'Facturado']
+        const yaEraCompletado = ESTADOS_COMPLETADO_CLIENTE.includes(old.estado)
+        if (ESTADOS_COMPLETADO_CLIENTE.includes(estado) && !yaEraCompletado && old.created_by) {
             try {
                 const perfilesCreador = await getPerfilesConEmail([old.created_by]);
                 const creador = perfilesCreador?.[0];

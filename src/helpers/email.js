@@ -277,6 +277,14 @@ async function enviarEmailCompletado({ cliente, ticket, empresa }) {
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const ticketUrl   = `${frontendUrl}/incidencias`;
 
+    // Usar sistema_nombre si existe, si no solo "Tu incidencia"
+    const sistemaRef  = ticket.sistema_nombre
+        ? ` con <strong>${ticket.sistema_nombre}</strong>`
+        : '';
+    const subjectRef  = ticket.sistema_nombre
+        ? `Tu incidencia con ${ticket.sistema_nombre} ha sido completada`
+        : 'Tu incidencia ha sido completada';
+
     const html = `
 <!DOCTYPE html>
 <html lang="es">
@@ -298,7 +306,7 @@ async function enviarEmailCompletado({ cliente, ticket, empresa }) {
           <td style="padding:32px;">
             <p style="margin:0 0 6px;color:#333333;font-size:15px;">Hola, <strong>${cliente.nombre || cliente.email}</strong></p>
             <p style="margin:0 0 24px;color:#555555;font-size:14px;line-height:1.6;">
-              Tu incidencia <strong>#${ticket.numero}</strong> ha sido resuelta y marcada como completada.
+              Tu incidencia${sistemaRef} ha sido resuelta y marcada como completada.
             </p>
             <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:20px;">
               <tr>
@@ -351,7 +359,7 @@ async function enviarEmailCompletado({ cliente, ticket, empresa }) {
     await emailTransporter.sendMail({
         from:    process.env.EMAIL_FROM || process.env.EMAIL_USER,
         to:      cliente.email,
-        subject: `Tu incidencia #${ticket.numero} ha sido completada`,
+        subject: subjectRef,
         html,
     });
 }
