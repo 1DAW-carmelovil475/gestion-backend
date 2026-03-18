@@ -5,7 +5,7 @@ const multer        = require('multer');
 const supabaseAdmin = require('../supabase');
 const { authGuard, adminGuard }                          = require('../middleware/auth');
 const { registrarHistorial, calcularHorasTranscurridas } = require('../helpers/historial');
-const { getPerfilesConEmail, enviarEmailAsignacion, enviarEmailIncidenciaGestores } = require('../helpers/email');
+const { getPerfilesConEmail, enviarEmailAsignacion, enviarEmailIncidenciaGestores, enviarEmailCompletado } = require('../helpers/email');
 const { upload, restoreFileNames }                        = require('../helpers/multer');
 
 const STORAGE_BUCKET = process.env.STORAGE_BUCKET || 'ticket-archivos';
@@ -183,26 +183,39 @@ router.post('/incidencia', authGuard, (req, res, next) => {
         return res.status(400).json({ error: 'Tu cuenta no tiene empresa asignada. Contacta con el administrador.' });
     }
 
-    const { asunto, descripcion } = req.body;
-    if (!asunto) return res.status(400).json({ error: 'El asunto es obligatorio.' });
+    const { asunto, descripcion, sistema_categoria, sistema_nombre } = req.body;
+    if (!asunto?.trim()) return res.status(400).json({ error: 'El asunto es obligatorio.' });
+
+    // Sanitizar entradas de texto
+    const sanitize = (str) => str ? String(str).trim().replace(/<[^>]*>/g, '') : null;
+    const asuntoClean      = sanitize(asunto);
+    const descripcionClean = sanitize(descripcion);
+    const sistemaCat       = sanitize(sistema_categoria);
+    const sistemaNombre    = sanitize(sistema_nombre);
 
     // Buscar teléfono del cliente en los contactos de la empresa
     let telefonoCliente = null;
-    const { data: empresaData } = await supabaseAdmin
-        .from('empresas').select('contactos').eq('id', req.user.empresa_id).single();
-    if (empresaData?.contactos && req.user.email) {
-        const contacto = empresaData.contactos.find(
+    const { data: empresaDataContactos } = await supabaseAdmin
+        .from('empresas').select('contactos, nombre').eq('id', req.user.empresa_id).single();
+    if (empresaDataContactos?.contactos && req.user.email) {
+        const contacto = empresaDataContactos.contactos.find(
             c => c.email?.toLowerCase() === req.user.email.toLowerCase()
         );
         telefonoCliente = contacto?.telefono || null;
     }
+    const empresaNombre = empresaDataContactos?.nombre || '';
+
+    // Asunto enriquecido con sistema si se indicó
+    const asuntoFinal = sistemaNombre
+        ? `[${sistemaNombre}] ${asuntoClean}`
+        : asuntoClean;
 
     const { data: ticket, error } = await supabaseAdmin
         .from('tickets_v2')
         .insert({
             empresa_id:       req.user.empresa_id,
-            asunto,
-            descripcion:      descripcion || null,
+            asunto:           asuntoFinal,
+            descripcion:      descripcionClean || null,
             prioridad:        'Media',
             estado:           'Pendiente',
             contacto_nombre:  req.user.nombre,
@@ -218,36 +231,37 @@ router.post('/incidencia', authGuard, (req, res, next) => {
         `Incidencia #${ticket.numero} creada por el cliente ${req.user.nombre || req.user.email}`
     );
 
-    // Obtener todos los gestores activos y asignarles el ticket
-    const { data: gestores } = await supabaseAdmin
+    // Determinar a quién asignar: desarrollador si es sistema web, gestor en el resto
+    const rolDestino = sistemaCat === 'web' ? 'desarrollador' : 'gestor';
+    const { data: receptores } = await supabaseAdmin
         .from('profiles')
         .select('id')
-        .eq('rol', 'gestor')
+        .eq('rol', rolDestino)
         .eq('activo', true);
 
-    if (gestores?.length) {
+    // Si no hay desarrolladores y la incidencia es web, caer en gestores
+    const asignados = receptores?.length ? receptores : (rolDestino === 'desarrollador' ? [] : []);
+    let perfilesAsignados = [];
+
+    if (asignados.length) {
         await supabaseAdmin.from('ticket_asignaciones').insert(
-            gestores.map(g => ({ ticket_id: ticket.id, user_id: g.id, asignado_by: req.user.id }))
+            asignados.map(g => ({ ticket_id: ticket.id, user_id: g.id, asignado_by: req.user.id }))
         );
+        const ids = asignados.map(g => g.id);
+        perfilesAsignados = await getPerfilesConEmail(ids);
 
-        const gestorIds = gestores.map(g => g.id);
-        const perfilesGestores = await getPerfilesConEmail(gestorIds);
-
-        const { data: empresaData } = await supabaseAdmin
-            .from('empresas').select('nombre').eq('id', req.user.empresa_id).single();
-
-        if (perfilesGestores?.length) {
+        if (perfilesAsignados?.length) {
             const results = await Promise.allSettled(
-                perfilesGestores.map(g => enviarEmailIncidenciaGestores({
+                perfilesAsignados.map(g => enviarEmailIncidenciaGestores({
                     gestor: g,
-                    ticket,
-                    empresa: empresaData?.nombre || '',
+                    ticket: { ...ticket, asunto: asuntoFinal },
+                    empresa: empresaNombre,
                     clienteNombre: req.user.nombre || req.user.email,
                 }))
             );
             results.forEach((r, i) => {
                 if (r.status === 'rejected') {
-                    console.warn(`[Email] Fallo enviando a gestor ${perfilesGestores[i]?.nombre}:`, r.reason?.message);
+                    console.warn(`[Email] Fallo enviando a ${perfilesAsignados[i]?.nombre}:`, r.reason?.message);
                 }
             });
         }
@@ -283,6 +297,15 @@ router.post('/incidencia', authGuard, (req, res, next) => {
     res.status(201).json(ticket);
 });
 
+// ── HELPERS DE SANITIZACIÓN ───────────────────────────────────────────────────
+function sanitizeText(str, maxLen = 500) {
+    if (!str) return null;
+    return String(str).trim().replace(/<[^>]*>/g, '').substring(0, maxLen) || null;
+}
+
+const PRIORIDADES_VALIDAS = ['Urgente', 'Alta', 'Media', 'Baja'];
+const ESTADOS_VALIDOS     = ['Pendiente', 'En curso', 'Completado', 'Pendiente de facturar', 'Facturado'];
+
 // ── CREAR ────────────────────────────────────────────────────────────────────
 router.post('/', authGuard, async (req, res) => {
     const { empresa_id, dispositivo_id, dispositivos_ids, asunto, descripcion, prioridad, estado, operarios, notas, telefono_cliente, contacto_nombre } = req.body;
@@ -290,19 +313,29 @@ router.post('/', authGuard, async (req, res) => {
         return res.status(400).json({ error: 'empresa_id y asunto son obligatorios.' });
     }
 
+    const asuntoClean      = sanitizeText(asunto, 200);
+    const descripcionClean = sanitizeText(descripcion, 2000);
+    const notasClean       = sanitizeText(notas, 5000);
+    const contactoClean    = sanitizeText(contacto_nombre, 100);
+    const telefonoClean    = sanitizeText(telefono_cliente, 30);
+    const prioridadClean   = PRIORIDADES_VALIDAS.includes(prioridad) ? prioridad : 'Media';
+    const estadoClean      = ESTADOS_VALIDOS.includes(estado) ? estado : 'Pendiente';
+
+    if (!asuntoClean) return res.status(400).json({ error: 'El asunto no puede estar vacío.' });
+
     const { data: ticket, error } = await supabaseAdmin
         .from('tickets_v2')
         .insert({
             empresa_id,
             dispositivo_id: dispositivo_id || null,
             dispositivos_ids: dispositivos_ids?.length ? dispositivos_ids : (dispositivo_id ? [dispositivo_id] : []),
-            asunto,
-            descripcion: descripcion || null,
-            notas: notas || null,
-            telefono_cliente: telefono_cliente || null,
-            contacto_nombre: contacto_nombre || null,
-            prioridad: prioridad || 'Media',
-            estado: estado || 'Pendiente',
+            asunto:          asuntoClean,
+            descripcion:     descripcionClean,
+            notas:           notasClean,
+            telefono_cliente: telefonoClean,
+            contacto_nombre:  contactoClean,
+            prioridad:       prioridadClean,
+            estado:          estadoClean,
             created_by: req.user.id,
         })
         .select().single();
@@ -348,16 +381,16 @@ router.put('/:id', authGuard, async (req, res) => {
     if (!old) return res.status(404).json({ error: 'Ticket no encontrado' });
 
     const updates = {};
-    if (asunto             !== undefined) updates.asunto             = asunto;
-    if (descripcion        !== undefined) updates.descripcion        = descripcion;
-    if (notas              !== undefined) updates.notas              = notas;
-    if (prioridad          !== undefined) updates.prioridad          = prioridad;
-    if (dispositivo_id     !== undefined) updates.dispositivo_id     = dispositivo_id;
-    if (dispositivos_ids   !== undefined) updates.dispositivos_ids   = dispositivos_ids;
-    if (telefono_cliente   !== undefined) updates.telefono_cliente   = telefono_cliente;
-    if (contacto_nombre    !== undefined) updates.contacto_nombre    = contacto_nombre;
+    if (asunto           !== undefined) updates.asunto           = sanitizeText(asunto, 200) || old.asunto;
+    if (descripcion      !== undefined) updates.descripcion      = sanitizeText(descripcion, 2000);
+    if (notas            !== undefined) updates.notas            = sanitizeText(notas, 5000);
+    if (prioridad        !== undefined && PRIORIDADES_VALIDAS.includes(prioridad)) updates.prioridad = prioridad;
+    if (dispositivo_id   !== undefined) updates.dispositivo_id   = dispositivo_id;
+    if (dispositivos_ids !== undefined) updates.dispositivos_ids = dispositivos_ids;
+    if (telefono_cliente !== undefined) updates.telefono_cliente = sanitizeText(telefono_cliente, 30);
+    if (contacto_nombre  !== undefined) updates.contacto_nombre  = sanitizeText(contacto_nombre, 100);
 
-    if (estado && estado !== old.estado) {
+    if (estado && ESTADOS_VALIDOS.includes(estado) && estado !== old.estado) {
         updates.estado = estado;
         if (estado === 'En curso')               updates.started_at   = old.started_at   || new Date().toISOString();
         if (estado === 'Completado')             updates.completed_at = new Date().toISOString();
@@ -368,6 +401,25 @@ router.put('/:id', authGuard, async (req, res) => {
             `Estado cambiado: "${old.estado}" → "${estado}"`,
             { de: old.estado, a: estado }
         );
+
+        // Enviar email al creador si el ticket se marca como completado
+        if (estado === 'Completado' && old.created_by) {
+            try {
+                const perfilesCreador = await getPerfilesConEmail([old.created_by]);
+                const creador = perfilesCreador?.[0];
+                if (creador?.email) {
+                    const { data: emp } = await supabaseAdmin
+                        .from('empresas').select('nombre').eq('id', old.empresa_id).single();
+                    await enviarEmailCompletado({
+                        cliente: creador,
+                        ticket:  old,
+                        empresa: emp?.nombre || '',
+                    });
+                }
+            } catch (emailErr) {
+                console.warn('[Email] Error enviando email de completado:', emailErr.message);
+            }
+        }
     }
 
     if (prioridad && prioridad !== old.prioridad) {

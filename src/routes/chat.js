@@ -8,6 +8,11 @@ const { upload, restoreFileNames } = require('../helpers/multer');
 
 const CHAT_STORAGE_BUCKET = process.env.CHAT_STORAGE_BUCKET || 'chat-archivos';
 
+function s(str, max = 500) {
+    if (!str) return null;
+    return String(str).trim().replace(/<[^>]*>/g, '').substring(0, max) || null;
+}
+
 // ── CANALES ───────────────────────────────────────────────────────────────────
 router.get('/canales', authGuard, async (req, res) => {
     const { data: memberships, error: memberError } = await supabaseAdmin
@@ -48,10 +53,12 @@ router.get('/canales', authGuard, async (req, res) => {
 router.post('/canales', authGuard, async (req, res) => {
     const { nombre, descripcion, tipo, miembros } = req.body;
     if (!nombre) return res.status(400).json({ error: 'El nombre es obligatorio.' });
+    const nombreSafe = s(nombre, 80);
+    if (!nombreSafe) return res.status(400).json({ error: 'El nombre no puede estar vacío.' });
 
     const { data: canal, error } = await supabaseAdmin
         .from('chat_canales')
-        .insert({ nombre: nombre.toLowerCase().replace(/\s+/g, '-'), descripcion: descripcion || null, tipo: tipo || 'canal', creado_por: req.user.id })
+        .insert({ nombre: nombreSafe.toLowerCase().replace(/\s+/g, '-'), descripcion: s(descripcion, 300) || null, tipo: tipo || 'canal', creado_por: req.user.id })
         .select().single();
 
     if (error) {
@@ -80,10 +87,12 @@ router.post('/canales', authGuard, async (req, res) => {
 router.put('/canales/:id', authGuard, adminGuard, async (req, res) => {
     const { nombre, descripcion, miembros } = req.body;
     if (!nombre) return res.status(400).json({ error: 'El nombre es obligatorio.' });
+    const nombreSafe = s(nombre, 80);
+    if (!nombreSafe) return res.status(400).json({ error: 'El nombre no puede estar vacío.' });
 
     const { error: canalError } = await supabaseAdmin
         .from('chat_canales')
-        .update({ nombre: nombre.toLowerCase().replace(/\s+/g, '-'), descripcion: descripcion || null })
+        .update({ nombre: nombreSafe.toLowerCase().replace(/\s+/g, '-'), descripcion: s(descripcion, 300) || null })
         .eq('id', req.params.id);
 
     if (canalError) return res.status(500).json({ error: canalError.message });
@@ -210,7 +219,7 @@ router.post('/canales/:id/mensajes', authGuard, (req, res, next) => {
         next();
     });
 }, async (req, res) => {
-    const contenido     = req.body.contenido?.trim() || '';
+    const contenido     = s(req.body.contenido, 4000) || '';
     const ticket_ref_id = req.body.ticket_ref_id || null;
     const files         = restoreFileNames(req.files || [], req);
 
@@ -272,8 +281,8 @@ router.post('/canales/:id/mensajes', authGuard, (req, res, next) => {
 });
 
 router.patch('/mensajes/:mensajeId', authGuard, async (req, res) => {
-    const { contenido } = req.body;
-    if (!contenido?.trim()) return res.status(400).json({ error: 'El contenido no puede estar vacío.' });
+    const contenido = s(req.body.contenido, 4000);
+    if (!contenido) return res.status(400).json({ error: 'El contenido no puede estar vacío.' });
 
     const { data: mensaje } = await supabaseAdmin
         .from('chat_mensajes').select('user_id').eq('id', req.params.mensajeId).single();
@@ -283,7 +292,7 @@ router.patch('/mensajes/:mensajeId', authGuard, async (req, res) => {
 
     const { data, error } = await supabaseAdmin
         .from('chat_mensajes')
-        .update({ contenido: contenido.trim(), editado: true })
+        .update({ contenido, editado: true })
         .eq('id', req.params.mensajeId)
         .select('id, contenido, editado, anclado, created_at, user_id')
         .single();

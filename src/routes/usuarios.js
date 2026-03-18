@@ -28,17 +28,31 @@ router.get('/', authGuard, adminGuard, async (req, res) => {
     }));
 });
 
+const ROLES_VALIDOS = ['admin', 'gestor', 'trabajador', 'desarrollador', 'cliente'];
+
+function sanitize(str, max = 200) {
+    if (!str) return null;
+    return String(str).trim().replace(/<[^>]*>/g, '').substring(0, max) || null;
+}
+
 router.post('/', authGuard, adminGuard, async (req, res) => {
-    const { nombre, email, rol, password, empresa_id, telefono } = req.body;
-    if (!nombre || !email || !rol || !password) {
+    const nombreClean = sanitize(req.body.nombre, 100);
+    const emailClean  = (req.body.email || '').toLowerCase().trim();
+    const rol         = ROLES_VALIDOS.includes(req.body.rol) ? req.body.rol : null;
+    const { password, empresa_id, telefono } = req.body;
+
+    if (!nombreClean || !emailClean || !rol || !password) {
         return res.status(400).json({ error: 'Nombre, email, rol y contraseña son obligatorios.' });
     }
     if (rol === 'cliente' && !empresa_id) {
         return res.status(400).json({ error: 'El rol cliente requiere seleccionar una empresa.' });
     }
 
+    const nombre = nombreClean;
+    const email  = emailClean;
+
     const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
-        email: email.toLowerCase().trim(),
+        email,
         password,
         email_confirm: true,
         user_metadata: { nombre, rol },
@@ -87,17 +101,19 @@ router.post('/', authGuard, adminGuard, async (req, res) => {
 });
 
 router.put('/:id', authGuard, adminGuard, async (req, res) => {
-    const { nombre, rol, activo, empresa_id, password, telefono } = req.body;
+    const { activo, empresa_id, password, telefono } = req.body;
+    const nombre = sanitize(req.body.nombre, 100);
+    const rol    = ROLES_VALIDOS.includes(req.body.rol) ? req.body.rol : undefined;
 
     // Obtener datos actuales antes de actualizar (para detectar cambio de empresa)
     const { data: perfilActual } = await supabaseAdmin
         .from('profiles').select('empresa_id, nombre').eq('id', req.params.id).single();
 
     const updates = {};
-    if (nombre     !== undefined) updates.nombre     = nombre;
-    if (rol        !== undefined) updates.rol        = rol;
-    if (activo     !== undefined) updates.activo     = activo;
-    if (empresa_id !== undefined) updates.empresa_id = empresa_id || null;
+    if (nombre     != null)       updates.nombre     = nombre;
+    if (rol        !== undefined)  updates.rol        = rol;
+    if (activo     !== undefined)  updates.activo     = activo;
+    if (empresa_id !== undefined)  updates.empresa_id = empresa_id || null;
 
     const { data, error } = await supabaseAdmin
         .from('profiles').update(updates).eq('id', req.params.id).select().single();

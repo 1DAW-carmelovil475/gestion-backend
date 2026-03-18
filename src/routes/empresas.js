@@ -9,10 +9,27 @@ router.get('/', authGuard, async (req, res) => {
     res.json(data);
 });
 
+function sanitize(str, max = 300) {
+    if (!str) return null;
+    return String(str).trim().replace(/<[^>]*>/g, '').substring(0, max) || null;
+}
+
 router.post('/', authGuard, async (req, res) => {
     const { nombre, cif } = req.body;
-    if (!nombre || !cif) return res.status(400).json({ error: 'Nombre y CIF son obligatorios.' });
-    const { data, error } = await supabaseAdmin.from('empresas').insert(req.body).select().single();
+    if (!nombre?.trim() || !cif?.trim()) return res.status(400).json({ error: 'Nombre y CIF son obligatorios.' });
+    const safe = {
+        nombre:    sanitize(req.body.nombre, 200),
+        cif:       sanitize(req.body.cif, 30),
+        email:     sanitize(req.body.email, 200),
+        telefono:  sanitize(req.body.telefono, 30),
+        direccion: sanitize(req.body.direccion, 300),
+        notas:     sanitize(req.body.notas, 2000),
+        servicios: Array.isArray(req.body.servicios) ? req.body.servicios : [],
+        contactos: Array.isArray(req.body.contactos) ? req.body.contactos : [],
+        estado:    req.body.estado || undefined,
+        empresa_matriz_id: req.body.empresa_matriz_id || null,
+    };
+    const { data, error } = await supabaseAdmin.from('empresas').insert(safe).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.status(201).json(data);
 });
@@ -41,8 +58,24 @@ router.put('/:id', authGuard, async (req, res) => {
         }
     }
 
+    // Only allow known safe fields — strip empresa_matriz_nombre and any injected columns
+    const allowed = ['nombre', 'cif', 'email', 'telefono', 'direccion', 'notas', 'servicios', 'contactos', 'estado', 'empresa_matriz_id'];
+    const safe = {};
+    for (const key of allowed) {
+        if (req.body[key] !== undefined) {
+            if (['servicios', 'contactos'].includes(key)) {
+                safe[key] = Array.isArray(req.body[key]) ? req.body[key] : [];
+            } else if (key === 'empresa_matriz_id') {
+                safe[key] = req.body[key] || null;
+            } else {
+                const s = sanitize(req.body[key], key === 'notas' ? 2000 : 300);
+                if (s !== null) safe[key] = s;
+            }
+        }
+    }
+
     const { data, error } = await supabaseAdmin
-        .from('empresas').update(req.body).eq('id', empresaId).select().single();
+        .from('empresas').update(safe).eq('id', empresaId).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
 });
