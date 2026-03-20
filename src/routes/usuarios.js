@@ -28,7 +28,7 @@ router.get('/', authGuard, adminGuard, async (req, res) => {
     }));
 });
 
-const ROLES_VALIDOS = ['admin', 'gestor', 'trabajador', 'desarrollador', 'cliente'];
+const ROLES_VALIDOS = ['admin', 'gestor', 'trabajador', 'cliente'];
 
 function sanitize(str, max = 200) {
     if (!str) return null;

@@ -231,16 +231,14 @@ router.post('/incidencia', authGuard, (req, res, next) => {
         `Incidencia #${ticket.numero} creada por el cliente ${req.user.nombre || req.user.email}`
     );
 
-    // Determinar a quién asignar: desarrollador si es sistema web, gestor en el resto
-    const rolDestino = sistemaCat === 'web' ? 'desarrollador' : 'gestor';
+    // Asignar a gestores (independientemente de si el sistema es web u otro)
     const { data: receptores } = await supabaseAdmin
         .from('profiles')
         .select('id')
-        .eq('rol', rolDestino)
+        .eq('rol', 'gestor')
         .eq('activo', true);
 
-    // Si no hay desarrolladores y la incidencia es web, caer en gestores
-    const asignados = receptores?.length ? receptores : (rolDestino === 'desarrollador' ? [] : []);
+    const asignados = receptores?.length ? receptores : [];
     let perfilesAsignados = [];
 
     if (asignados.length) {
@@ -368,6 +366,34 @@ router.post('/', authGuard, async (req, res) => {
                 }
             });
         }
+    }
+
+    // Notificar a gestores sobre el nuevo ticket
+    try {
+        const { data: gestores } = await supabaseAdmin
+            .from('profiles').select('id').eq('rol', 'gestor').eq('activo', true);
+        if (gestores?.length) {
+            const perfilesGestores = await getPerfilesConEmail(gestores.map(g => g.id));
+            const { data: empData } = await supabaseAdmin
+                .from('empresas').select('nombre').eq('id', empresa_id).single();
+            let opNombres = [];
+            if (operarios?.length) {
+                const { data: opProfiles } = await supabaseAdmin
+                    .from('profiles').select('nombre').in('id', operarios);
+                opNombres = opProfiles?.map(p => p.nombre) || [];
+            }
+            await Promise.allSettled(
+                perfilesGestores.map(g => enviarEmailIncidenciaGestores({
+                    gestor: g,
+                    ticket,
+                    empresa: empData?.nombre || '',
+                    clienteNombre: req.user.nombre || req.user.email,
+                    operariosAsignados: opNombres,
+                }))
+            );
+        }
+    } catch (gestorEmailErr) {
+        console.warn('[Email] Error notificando a gestores:', gestorEmailErr.message);
     }
 
     res.status(201).json(ticket);

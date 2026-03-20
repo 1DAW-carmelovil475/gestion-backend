@@ -7,7 +7,7 @@ router.get('/', authGuard, async (req, res) => {
     const { data, error } = await supabaseAdmin
         .from('profiles')
         .select('id, nombre, rol, activo')
-        .in('rol', ['admin', 'trabajador', 'gestor', 'desarrollador'])
+        .in('rol', ['admin', 'trabajador', 'gestor'])
         .eq('activo', true)
         .order('nombre');
     if (error) return res.status(500).json({ error: error.message });

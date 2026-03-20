@@ -104,13 +104,14 @@ router.get('/empresas', authGuard, adminGuard, async (req, res) => {
     const { desde, hasta } = req.query;
     let query = supabaseAdmin
         .from('tickets_v2')
-        .select('empresa_id, estado, prioridad, created_at, empresas(nombre)');
+        .select('empresa_id, estado, prioridad, created_at, completed_at, invoiced_at, empresas(nombre)');
     if (desde) query = query.gte('created_at', desde);
     if (hasta) query = query.lte('created_at', hasta + 'T23:59:59');
 
     const { data, error } = await query;
     if (error) return res.status(500).json({ error: error.message });
 
+    const ESTADOS_CERRADO = ['Completado', 'Pendiente de facturar', 'Facturado'];
     const map = {};
     data?.forEach(t => {
         if (!map[t.empresa_id]) {
@@ -118,6 +119,7 @@ router.get('/empresas', authGuard, adminGuard, async (req, res) => {
                 id: t.empresa_id, nombre: t.empresas?.nombre,
                 total: 0, pendientes: 0, en_curso: 0, completados: 0,
                 pendiente_facturar: 0, facturados: 0, urgentes: 0,
+                _tiempos: [],
             };
         }
         map[t.empresa_id].total++;
@@ -127,9 +129,23 @@ router.get('/empresas', authGuard, adminGuard, async (req, res) => {
         if (t.estado === 'Pendiente de facturar') map[t.empresa_id].pendiente_facturar++;
         if (t.estado === 'Facturado')             map[t.empresa_id].facturados++;
         if (t.prioridad === 'Urgente')            map[t.empresa_id].urgentes++;
+
+        if (ESTADOS_CERRADO.includes(t.estado) && t.created_at) {
+            const fechaCierre = t.invoiced_at || t.completed_at;
+            if (fechaCierre) {
+                const h = (new Date(fechaCierre) - new Date(t.created_at)) / 3600000;
+                if (h > 0) map[t.empresa_id]._tiempos.push(h);
+            }
+        }
     });
 
-    res.json(Object.values(map).sort((a, b) => b.total - a.total));
+    res.json(Object.values(map).map(e => {
+        const media_horas = e._tiempos.length
+            ? e._tiempos.reduce((a, b) => a + b, 0) / e._tiempos.length
+            : null;
+        const { _tiempos, ...rest } = e;
+        return { ...rest, media_horas };
+    }).sort((a, b) => b.total - a.total));
 });
 
 module.exports = router;

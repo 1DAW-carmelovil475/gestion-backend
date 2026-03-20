@@ -28,7 +28,7 @@ async function authGuard(req, res, next) {
 }
 
 function adminGuard(req, res, next) {
-    const allowed = ['admin', 'gestor', 'desarrollador'];
+    const allowed = ['admin', 'gestor'];
     if (!allowed.includes(req.user?.rol))
         return res.status(403).json({ error: 'Solo administradores.' });
     next();

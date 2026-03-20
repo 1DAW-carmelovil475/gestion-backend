@@ -155,7 +155,7 @@ async function enviarEmailAsignacion({ operario, ticket, empresa }) {
     });
 }
 
-async function enviarEmailIncidenciaGestores({ gestor, ticket, empresa, clienteNombre }) {
+async function enviarEmailIncidenciaGestores({ gestor, ticket, empresa, clienteNombre, operariosAsignados }) {
     if (!gestor.email) return;
 
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
@@ -229,6 +229,16 @@ async function enviarEmailIncidenciaGestores({ gestor, ticket, empresa, clienteN
                 <td style="background:#fafafa;border:1px solid #e0e0e0;padding:14px 16px;">
                   <p style="margin:0 0 4px;color:#888888;font-size:11px;text-transform:uppercase;">Descripcion</p>
                   <p style="margin:0;color:#444444;font-size:14px;line-height:1.6;">${ticket.descripcion}</p>
+                </td>
+              </tr>
+            </table>` : ''}
+
+            ${operariosAsignados?.length ? `
+            <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px;">
+              <tr>
+                <td style="background:#fafafa;border:1px solid #e0e0e0;padding:14px 16px;">
+                  <p style="margin:0 0 4px;color:#888888;font-size:11px;text-transform:uppercase;">Operarios asignados</p>
+                  <p style="margin:0;color:#444444;font-size:14px;line-height:1.6;">${operariosAsignados.join(', ')}</p>
                 </td>
               </tr>
             </table>` : ''}
