@@ -37,7 +37,7 @@ async function getPerfilesConEmail(ids) {
 async function enviarEmailAsignacion({ operario, ticket, empresa }) {
     if (!operario.email) return;
 
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const frontendUrl = process.env.FRONTEND_URL;
     const ticketUrl   = `${frontendUrl}/tickets`;
 
     const prioridadColor = {
@@ -158,7 +158,7 @@ async function enviarEmailAsignacion({ operario, ticket, empresa }) {
 async function enviarEmailIncidenciaGestores({ gestor, ticket, empresa, clienteNombre, operariosAsignados }) {
     if (!gestor.email) return;
 
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const frontendUrl = process.env.FRONTEND_URL;
     const ticketUrl   = `${frontendUrl}/tickets`;
 
     const html = `
@@ -284,7 +284,7 @@ async function enviarEmailIncidenciaGestores({ gestor, ticket, empresa, clienteN
 async function enviarEmailCompletado({ cliente, ticket, empresa }) {
     if (!cliente.email) return;
 
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const frontendUrl = process.env.FRONTEND_URL;
     const ticketUrl   = `${frontendUrl}/incidencias`;
 
     // Usar sistema_nombre si existe, si no solo "Tu incidencia"
