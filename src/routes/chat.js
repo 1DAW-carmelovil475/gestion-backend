@@ -331,4 +331,23 @@ router.delete('/mensajes/:mensajeId', authGuard, async (req, res) => {
     res.json({ ok: true });
 });
 
+// ── PREFS (pin / mute / hide / orden por cuenta) ─────────────────────────────
+router.get('/prefs', authGuard, async (req, res) => {
+    const { data } = await supabaseAdmin
+        .from('chat_user_prefs')
+        .select('prefs')
+        .eq('user_id', req.user.id)
+        .maybeSingle();
+    res.json({ prefs: data?.prefs || {} });
+});
+
+router.put('/prefs', authGuard, async (req, res) => {
+    const prefs = req.body?.prefs || {};
+    const { error } = await supabaseAdmin
+        .from('chat_user_prefs')
+        .upsert({ user_id: req.user.id, prefs }, { onConflict: 'user_id' });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+});
+
 module.exports = router;
