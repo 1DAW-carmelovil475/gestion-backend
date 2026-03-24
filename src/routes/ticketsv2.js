@@ -401,12 +401,13 @@ router.post('/', authGuard, async (req, res) => {
 
 // ── EDITAR ───────────────────────────────────────────────────────────────────
 router.put('/:id', authGuard, async (req, res) => {
-    const { estado, prioridad, asunto, descripcion, dispositivo_id, dispositivos_ids, notas, telefono_cliente, contacto_nombre } = req.body;
+    const { estado, prioridad, empresa_id, asunto, descripcion, dispositivo_id, dispositivos_ids, notas, telefono_cliente, contacto_nombre } = req.body;
     const { data: old } = await supabaseAdmin
         .from('tickets_v2').select('*').eq('id', req.params.id).single();
     if (!old) return res.status(404).json({ error: 'Ticket no encontrado' });
 
     const updates = {};
+    if (empresa_id       !== undefined && empresa_id) updates.empresa_id = empresa_id;
     if (asunto           !== undefined) updates.asunto           = sanitizeText(asunto, 200) || old.asunto;
     if (descripcion      !== undefined) updates.descripcion      = sanitizeText(descripcion, 2000);
     if (notas            !== undefined) updates.notas            = sanitizeText(notas, 5000);
@@ -415,6 +416,7 @@ router.put('/:id', authGuard, async (req, res) => {
     if (dispositivos_ids !== undefined) updates.dispositivos_ids = dispositivos_ids;
     if (telefono_cliente !== undefined) updates.telefono_cliente = sanitizeText(telefono_cliente, 30);
     if (contacto_nombre  !== undefined) updates.contacto_nombre  = sanitizeText(contacto_nombre, 100);
+
 
     if (estado && ESTADOS_VALIDOS.includes(estado) && estado !== old.estado) {
         updates.estado = estado;
