@@ -53,7 +53,7 @@ router.get('/', authGuard, async (req, res) => {
 
         query = empresaIds.length
             ? query.in('empresa_id', empresaIds)
-            : query.eq('empresa_id', null);
+            : query.is('empresa_id', null);
     } else {
         if (estado && estado !== 'all')       query = query.eq('estado', estado);
         if (prioridad && prioridad !== 'all') query = query.eq('prioridad', prioridad);

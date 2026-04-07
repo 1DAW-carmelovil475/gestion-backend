@@ -101,7 +101,7 @@ router.post('/', authGuard, adminGuard, async (req, res) => {
 });
 
 router.put('/:id', authGuard, adminGuard, async (req, res) => {
-    const { activo, empresa_id, password, telefono } = req.body;
+    const { activo, empresa_id, password, telefono, email } = req.body;
     const nombre = sanitize(req.body.nombre, 100);
     const rol    = ROLES_VALIDOS.includes(req.body.rol) ? req.body.rol : undefined;
 
@@ -119,9 +119,12 @@ router.put('/:id', authGuard, adminGuard, async (req, res) => {
         .from('profiles').update(updates).eq('id', req.params.id).select().single();
     if (error) return res.status(500).json({ error: error.message });
 
-    // Si se cambió la contraseña
-    if (password?.trim()) {
-        await supabaseAdmin.auth.admin.updateUserById(req.params.id, { password: password.trim() });
+    // Si se cambió la contraseña o el email
+    const authUpdates = {};
+    if (password?.trim()) authUpdates.password = password.trim();
+    if (email?.trim())    authUpdates.email    = email.trim();
+    if (Object.keys(authUpdates).length > 0) {
+        await supabaseAdmin.auth.admin.updateUserById(req.params.id, authUpdates);
     }
 
     // Si cambió la empresa, mover el contacto de la empresa antigua a la nueva

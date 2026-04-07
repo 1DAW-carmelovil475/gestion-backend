@@ -28,6 +28,7 @@ async function getPerfilesConEmail(ids) {
     if (!perfiles?.length) return [];
 
     const { data: authData } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 });
+
     const emailMap = {};
     authData?.users?.forEach(u => { emailMap[u.id] = u.email; });
 

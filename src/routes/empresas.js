@@ -37,23 +37,52 @@ router.post('/', authGuard, async (req, res) => {
 router.put('/:id', authGuard, async (req, res) => {
     const empresaId = req.params.id;
 
-    // Detect removed contacts to clear their user's empresa_id
+    // Detect contact changes to sync linked users
     if (Array.isArray(req.body.contactos)) {
         const { data: current } = await supabaseAdmin
             .from('empresas').select('contactos').eq('id', empresaId).single();
-        const oldEmails = (current?.contactos || []).map(c => c.email?.toLowerCase()).filter(Boolean);
-        const newEmails = req.body.contactos.map(c => c.email?.toLowerCase()).filter(Boolean);
+        const oldContacts = current?.contactos || [];
+        const newContacts = req.body.contactos;
+
+        const oldEmails = oldContacts.map(c => c.email?.toLowerCase()).filter(Boolean);
+        const newEmails = newContacts.map(c => c.email?.toLowerCase()).filter(Boolean);
         const removedEmails = oldEmails.filter(e => !newEmails.includes(e));
 
+        const { data: authUsers } = await supabaseAdmin.auth.admin.listUsers();
+        const allAuthUsers = authUsers?.users || [];
+
+        // Eliminar empresa_id de usuarios cuyos contactos fueron eliminados
         for (const email of removedEmails) {
-            const { data: authUsers } = await supabaseAdmin.auth.admin.listUsers();
-            const authUser = authUsers?.users?.find(u => u.email?.toLowerCase() === email);
+            const authUser = allAuthUsers.find(u => u.email?.toLowerCase() === email);
             if (authUser) {
                 await supabaseAdmin
                     .from('profiles')
                     .update({ empresa_id: null })
                     .eq('id', authUser.id)
                     .eq('empresa_id', empresaId);
+            }
+        }
+
+        // Sincronizar nombre, teléfono y email de contactos modificados
+        for (const oldC of oldContacts) {
+            if (!oldC.email) continue;
+            const newC = newContacts.find(c => c.email?.toLowerCase() === oldC.email.toLowerCase())
+                      || newContacts.find(c => c.nombre === oldC.nombre && !oldC.email);
+            if (!newC) continue;
+            const authUser = allAuthUsers.find(u => u.email?.toLowerCase() === oldC.email.toLowerCase());
+            if (!authUser) continue;
+
+            const profileUpdates = {};
+            if (newC.nombre && newC.nombre !== oldC.nombre) profileUpdates.nombre = newC.nombre;
+            if (newC.telefono !== undefined) profileUpdates.telefono = newC.telefono || '';
+
+            if (Object.keys(profileUpdates).length > 0) {
+                await supabaseAdmin.from('profiles').update(profileUpdates).eq('id', authUser.id);
+            }
+
+            // Actualizar email en auth si cambió
+            if (newC.email && newC.email.toLowerCase() !== oldC.email.toLowerCase()) {
+                await supabaseAdmin.auth.admin.updateUserById(authUser.id, { email: newC.email.toLowerCase() });
             }
         }
     }
