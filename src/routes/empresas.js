@@ -37,53 +37,60 @@ router.post('/', authGuard, async (req, res) => {
 router.put('/:id', authGuard, async (req, res) => {
     const empresaId = req.params.id;
 
-    // Detect contact changes to sync linked users
+    // Sync linked users when contacts change
     if (Array.isArray(req.body.contactos)) {
         const { data: current } = await supabaseAdmin
             .from('empresas').select('contactos').eq('id', empresaId).single();
         const oldContacts = current?.contactos || [];
         const newContacts = req.body.contactos;
 
-        const oldEmails = oldContacts.map(c => c.email?.toLowerCase()).filter(Boolean);
-        const newEmails = newContacts.map(c => c.email?.toLowerCase()).filter(Boolean);
-        const removedEmails = oldEmails.filter(e => !newEmails.includes(e));
-
+        // Buscar todos los usuarios vinculados a esta empresa
+        const { data: empresaProfiles } = await supabaseAdmin
+            .from('profiles').select('id, nombre, empresa_id').eq('empresa_id', empresaId);
         const { data: authUsers } = await supabaseAdmin.auth.admin.listUsers();
         const allAuthUsers = authUsers?.users || [];
 
-        // Eliminar empresa_id de usuarios cuyos contactos fueron eliminados
-        for (const email of removedEmails) {
-            const authUser = allAuthUsers.find(u => u.email?.toLowerCase() === email);
-            if (authUser) {
-                await supabaseAdmin
-                    .from('profiles')
-                    .update({ empresa_id: null })
-                    .eq('id', authUser.id)
-                    .eq('empresa_id', empresaId);
-            }
-        }
+        // Para cada usuario vinculado, buscar su contacto antiguo y nuevo
+        for (const profile of (empresaProfiles || [])) {
+            const authUser = allAuthUsers.find(u => u.id === profile.id);
+            if (!authUser?.email) continue;
+            const userEmail = authUser.email.toLowerCase();
 
-        // Sincronizar nombre, teléfono y email de contactos modificados
-        for (const oldC of oldContacts) {
-            if (!oldC.email) continue;
-            const newC = newContacts.find(c => c.email?.toLowerCase() === oldC.email.toLowerCase())
-                      || newContacts.find(c => c.nombre === oldC.nombre && !oldC.email);
+            // Buscar contacto antiguo por email o por nombre
+            const oldC = oldContacts.find(c => c.email?.toLowerCase() === userEmail)
+                      || oldContacts.find(c => c.nombre?.trim().toLowerCase() === profile.nombre?.trim().toLowerCase());
+            if (!oldC) continue;
+
+            // Buscar contacto nuevo por misma posición/nombre
+            const oldIdx = oldContacts.indexOf(oldC);
+            const newC = newContacts[oldIdx]
+                      || newContacts.find(c => c.email?.toLowerCase() === userEmail)
+                      || newContacts.find(c => c.nombre === oldC.nombre);
             if (!newC) continue;
-            const authUser = allAuthUsers.find(u => u.email?.toLowerCase() === oldC.email.toLowerCase());
-            if (!authUser) continue;
 
-            const profileUpdates = {};
-            if (newC.nombre && newC.nombre !== oldC.nombre) profileUpdates.nombre = newC.nombre;
-            if (newC.telefono !== undefined) profileUpdates.telefono = newC.telefono || '';
-
-            if (Object.keys(profileUpdates).length > 0) {
-                await supabaseAdmin.from('profiles').update(profileUpdates).eq('id', authUser.id);
+            // Actualizar nombre en profiles
+            if (newC.nombre && newC.nombre !== profile.nombre) {
+                await supabaseAdmin.from('profiles').update({ nombre: newC.nombre }).eq('id', profile.id);
             }
 
             // Actualizar email en auth si cambió
-            if (newC.email && newC.email.toLowerCase() !== oldC.email.toLowerCase()) {
-                await supabaseAdmin.auth.admin.updateUserById(authUser.id, { email: newC.email.toLowerCase() });
+            if (newC.email && newC.email.toLowerCase() !== userEmail) {
+                await supabaseAdmin.auth.admin.updateUserById(profile.id, { email: newC.email.toLowerCase() });
             }
+        }
+
+        // Detectar contactos eliminados y limpiar tickets abiertos
+        const oldNames = oldContacts.map(c => c.nombre).filter(Boolean);
+        const newNames = newContacts.map(c => c.nombre).filter(Boolean);
+        const removedNames = oldNames.filter(n => !newNames.includes(n));
+
+        for (const nombre of removedNames) {
+            await supabaseAdmin
+                .from('tickets_v2')
+                .update({ contacto_nombre: null, telefono_cliente: null })
+                .eq('empresa_id', empresaId)
+                .eq('contacto_nombre', nombre)
+                .in('estado', ['Pendiente', 'En curso']);
         }
     }
 

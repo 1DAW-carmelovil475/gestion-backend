@@ -18,7 +18,8 @@ router.get('/', authGuard, adminGuard, async (req, res) => {
     res.json(profiles.map(p => {
         const email = emailMap[p.id] || '—';
         const contactos = p.empresas?.contactos || [];
-        const contacto = contactos.find(c => c.email?.toLowerCase() === email.toLowerCase());
+        const contacto = contactos.find(c => c.email && c.email.toLowerCase() === email.toLowerCase())
+                      || contactos.find(c => c.nombre && p.nombre && c.nombre.trim().toLowerCase() === p.nombre.trim().toLowerCase());
         return {
             ...p,
             email,
@@ -184,6 +185,46 @@ router.delete('/:id', authGuard, adminGuard, async (req, res) => {
     if (req.params.id === req.user.id) {
         return res.status(400).json({ error: 'No puedes eliminar tu propia cuenta.' });
     }
+
+    // Obtener datos del usuario antes de eliminarlo
+    const { data: profile } = await supabaseAdmin
+        .from('profiles').select('nombre, empresa_id').eq('id', req.params.id).single();
+    const { data: authUser } = await supabaseAdmin.auth.admin.getUserById(req.params.id);
+    const userEmail = authUser?.user?.email?.toLowerCase();
+
+    // Eliminar contacto de la empresa si tiene una asignada
+    if (profile?.empresa_id && userEmail) {
+        const { data: empresa } = await supabaseAdmin
+            .from('empresas').select('contactos').eq('id', profile.empresa_id).single();
+        if (empresa?.contactos) {
+            const contacto = empresa.contactos.find(c => c.email?.toLowerCase() === userEmail)
+                          || empresa.contactos.find(c => c.nombre?.trim().toLowerCase() === profile.nombre?.trim().toLowerCase());
+            if (contacto) {
+                const nuevosContactos = empresa.contactos.filter(c => c !== contacto);
+                await supabaseAdmin.from('empresas').update({ contactos: nuevosContactos }).eq('id', profile.empresa_id);
+
+                // Limpiar contacto_nombre en tickets abiertos que lo tenían asignado
+                const contactoNombre = contacto.nombre;
+                if (contactoNombre) {
+                    const { data: ticketsConContacto } = await supabaseAdmin
+                        .from('tickets_v2')
+                        .select('id, estado')
+                        .eq('empresa_id', profile.empresa_id)
+                        .eq('contacto_nombre', contactoNombre)
+                        .in('estado', ['Pendiente', 'En curso']);
+                    if (ticketsConContacto?.length) {
+                        await supabaseAdmin
+                            .from('tickets_v2')
+                            .update({ contacto_nombre: null, telefono_cliente: null })
+                            .eq('empresa_id', profile.empresa_id)
+                            .eq('contacto_nombre', contactoNombre)
+                            .in('estado', ['Pendiente', 'En curso']);
+                    }
+                }
+            }
+        }
+    }
+
     const { error } = await supabaseAdmin.auth.admin.deleteUser(req.params.id);
     if (error) return res.status(500).json({ error: error.message });
     res.json({ ok: true });

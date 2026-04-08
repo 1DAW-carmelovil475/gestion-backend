@@ -398,7 +398,6 @@ router.post('/', authGuard, async (req, res) => {
 // ── EDITAR ───────────────────────────────────────────────────────────────────
 router.put('/:id', authGuard, async (req, res) => {
     const { estado, prioridad, empresa_id, asunto, descripcion, dispositivo_id, dispositivos_ids, notas, telefono_cliente, contacto_nombre } = req.body;
-    console.log('[PUT ticket] empresa_id recibido:', empresa_id);
     const { data: old } = await supabaseAdmin
         .from('tickets_v2').select('*').eq('id', req.params.id).single();
     if (!old) return res.status(404).json({ error: 'Ticket no encontrado' });
