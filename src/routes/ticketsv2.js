@@ -231,21 +231,17 @@ router.post('/incidencia', authGuard, (req, res, next) => {
         `Incidencia #${ticket.numero} creada por el cliente ${req.user.nombre || req.user.email}`
     );
 
-    // Asignar a gestores (independientemente de si el sistema es web u otro)
+    // Notificar a gestores por email (sin asignar el ticket)
     const { data: receptores } = await supabaseAdmin
         .from('profiles')
         .select('id')
         .eq('rol', 'gestor')
         .eq('activo', true);
 
-    const asignados = receptores?.length ? receptores : [];
     let perfilesAsignados = [];
 
-    if (asignados.length) {
-        await supabaseAdmin.from('ticket_asignaciones').insert(
-            asignados.map(g => ({ ticket_id: ticket.id, user_id: g.id, asignado_by: req.user.id }))
-        );
-        const ids = asignados.map(g => g.id);
+    if (receptores?.length) {
+        const ids = receptores.map(g => g.id);
         perfilesAsignados = await getPerfilesConEmail(ids);
 
         if (perfilesAsignados?.length) {

@@ -5,11 +5,17 @@ const { authGuard, adminGuard } = require('../middleware/auth');
 
 router.get('/resumen', authGuard, adminGuard, async (req, res) => {
     const { data, error } = await supabaseAdmin
-        .from('tickets_v2').select('estado, prioridad, created_at');
+        .from('tickets_v2').select('id, estado, prioridad, created_at');
     if (error) return res.status(500).json({ error: error.message });
+
+    // Obtener todos los ticket_ids que tienen asignaciones
+    const { data: asignaciones } = await supabaseAdmin
+        .from('ticket_asignaciones').select('ticket_id');
+    const ticketsConAsignacion = new Set((asignaciones || []).map(a => a.ticket_id));
 
     const now = new Date();
     const hace7dias = new Date(now - 7 * 86400000);
+    const abiertos = ['Pendiente', 'En curso'];
 
     res.json({
         total:              data.length,
@@ -18,6 +24,7 @@ router.get('/resumen', authGuard, adminGuard, async (req, res) => {
         completados:        data.filter(t => t.estado === 'Completado').length,
         pendiente_facturar: data.filter(t => t.estado === 'Pendiente de facturar').length,
         facturados:         data.filter(t => t.estado === 'Facturado').length,
+        sin_asignar:        data.filter(t => abiertos.includes(t.estado) && !ticketsConAsignacion.has(t.id)).length,
         urgentes:           data.filter(t => t.prioridad === 'Urgente').length,
         ultimos_7_dias:     data.filter(t => new Date(t.created_at) >= hace7dias).length,
     });
