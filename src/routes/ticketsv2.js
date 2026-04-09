@@ -19,10 +19,12 @@ router.get('/', authGuard, async (req, res) => {
         .select(`
             id, numero, asunto, descripcion, prioridad, estado, notas,
             created_at, started_at, completed_at, invoiced_at,
+            tiempo_acumulado_ms, en_curso_desde,
             empresa_id, dispositivo_id,
             empresas(id, nombre),
             dispositivos(id, nombre, tipo),
-            ticket_asignaciones(user_id, asignado_at)
+            ticket_asignaciones(user_id, asignado_at),
+            ticket_horas(id, fecha_inicio, fecha_fin, user_id)
         `)
         .order('created_at', { ascending: false });
 
@@ -75,14 +77,22 @@ router.get('/', authGuard, async (req, res) => {
         perfiles?.forEach(p => { profileMap[p.id] = p.nombre; });
     }
 
-    let result = data.map(t => ({
-        ...t,
-        ticket_asignaciones: (t.ticket_asignaciones || []).map(a => ({
-            ...a,
-            profiles: { id: a.user_id, nombre: profileMap[a.user_id] || '?' },
-        })),
-        horas_transcurridas: calcularHorasTranscurridas(t),
-    }));
+    let result = data.map(t => {
+        const horasManual = (t.ticket_horas || []).reduce((s, h) => {
+            const ms = new Date(h.fecha_fin) - new Date(h.fecha_inicio);
+            return s + Math.max(0, ms / 36e5);
+        }, 0);
+        const horasTotales = Math.round(horasManual * 100) / 100;
+        return {
+            ...t,
+            ticket_asignaciones: (t.ticket_asignaciones || []).map(a => ({
+                ...a,
+                profiles: { id: a.user_id, nombre: profileMap[a.user_id] || '?' },
+            })),
+            horas_transcurridas: calcularHorasTranscurridas(t),
+            horas_totales: horasTotales,
+        };
+    });
 
     if (operario_id) {
         result = result.filter(t => t.ticket_asignaciones?.some(a => a.user_id === operario_id));
@@ -109,7 +119,7 @@ router.get('/:id', authGuard, async (req, res) => {
             dispositivos(id, nombre, tipo, ip, numero_serie),
             ticket_asignaciones(id, user_id, asignado_at),
             ticket_historial(id, tipo, descripcion, datos, created_at, user_id),
-            ticket_horas(id, horas, descripcion, fecha, user_id),
+            ticket_horas(id, fecha_inicio, fecha_fin, descripcion, user_id),
             ticket_archivos(id, nombre_original, storage_path, mime_type, tamanio, created_at, subido_by)
         `)
         .eq('id', req.params.id)
@@ -150,7 +160,11 @@ router.get('/:id', authGuard, async (req, res) => {
     }
 
     data.horas_transcurridas = calcularHorasTranscurridas(data);
-    data.horas_totales = (data.ticket_horas || []).reduce((s, h) => s + Number(h.horas), 0);
+    data.horas_totales = (data.ticket_horas || []).reduce((s, h) => {
+        const ms = new Date(h.fecha_fin) - new Date(h.fecha_inicio);
+        return s + Math.max(0, ms / 36e5);
+    }, 0);
+    data.horas_totales = Math.round(data.horas_totales * 100) / 100;
 
     // Resolver dispositivos adicionales desde el array dispositivos_ids
     const extraIds = (data.dispositivos_ids || []).filter(id => id && id !== data.dispositivo_id);
@@ -298,7 +312,7 @@ function sanitizeText(str, maxLen = 500) {
 }
 
 const PRIORIDADES_VALIDAS = ['Urgente', 'Alta', 'Media', 'Baja'];
-const ESTADOS_VALIDOS     = ['Pendiente', 'En curso', 'Completado', 'Pendiente de facturar', 'Facturado'];
+const ESTADOS_VALIDOS     = ['Pendiente', 'En curso', 'Pausado', 'Completado', 'Pendiente de facturar', 'Facturado'];
 
 // ── CREAR ────────────────────────────────────────────────────────────────────
 router.post('/', authGuard, async (req, res) => {
@@ -416,10 +430,24 @@ router.put('/:id', authGuard, async (req, res) => {
 
     if (estado && ESTADOS_VALIDOS.includes(estado) && estado !== old.estado) {
         updates.estado = estado;
-        if (estado === 'En curso')               updates.started_at   = old.started_at   || new Date().toISOString();
-        if (estado === 'Completado')             updates.completed_at = new Date().toISOString();
-        if (estado === 'Pendiente de facturar')  updates.completed_at = new Date().toISOString();
-        if (estado === 'Facturado')              updates.invoiced_at  = new Date().toISOString();
+        const now = new Date().toISOString();
+
+        // Al entrar en "En curso": empezar a contar tiempo
+        if (estado === 'En curso') {
+            updates.started_at    = old.started_at || now;
+            updates.en_curso_desde = now;
+        }
+
+        // Al salir de "En curso" (pausar, completar, etc.): acumular tiempo
+        if (old.estado === 'En curso' && old.en_curso_desde) {
+            const msActivo = Date.now() - new Date(old.en_curso_desde).getTime();
+            updates.tiempo_acumulado_ms = (old.tiempo_acumulado_ms || 0) + Math.max(0, msActivo);
+            updates.en_curso_desde = null;
+        }
+
+        if (estado === 'Completado')             updates.completed_at = now;
+        if (estado === 'Pendiente de facturar')  updates.completed_at = now;
+        if (estado === 'Facturado')              updates.invoiced_at  = now;
         await registrarHistorial(
             req.params.id, req.user.id, 'estado',
             `Estado cambiado: "${old.estado}" → "${estado}"`,
@@ -465,6 +493,32 @@ router.put('/:id', authGuard, async (req, res) => {
 // ── ELIMINAR ─────────────────────────────────────────────────────────────────
 router.delete('/:id', authGuard, adminGuard, async (req, res) => {
     const { error } = await supabaseAdmin.from('tickets_v2').delete().eq('id', req.params.id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+});
+
+// ── HORAS MANUALES ──────────────────────────────────────────────────────────
+router.post('/:id/horas', authGuard, async (req, res) => {
+    const { fecha_inicio, fecha_fin, descripcion } = req.body;
+    if (!fecha_inicio || !fecha_fin) return res.status(400).json({ error: 'Fecha inicio y fin son obligatorias' });
+    const inicio = new Date(fecha_inicio);
+    const fin = new Date(fecha_fin);
+    if (fin <= inicio) return res.status(400).json({ error: 'La fecha fin debe ser posterior a la de inicio' });
+    const horas = Math.round((fin - inicio) / 36e5 * 100) / 100;
+    const { data, error } = await supabaseAdmin.from('ticket_horas').insert({
+        ticket_id: req.params.id,
+        user_id: req.user.id,
+        fecha_inicio,
+        fecha_fin,
+        descripcion: descripcion?.trim() || null,
+    }).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    await registrarHistorial(req.params.id, req.user.id, 'horas', `Registradas ${horas}h`, { fecha_inicio, fecha_fin, horas });
+    res.json(data);
+});
+
+router.delete('/:id/horas/:horaId', authGuard, async (req, res) => {
+    const { error } = await supabaseAdmin.from('ticket_horas').delete().eq('id', req.params.horaId).eq('ticket_id', req.params.id);
     if (error) return res.status(500).json({ error: error.message });
     res.json({ ok: true });
 });

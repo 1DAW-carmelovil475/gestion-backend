@@ -12,19 +12,12 @@ async function registrarHistorial(ticketId, userId, tipo, descripcion, datos = {
 }
 
 function calcularHorasTranscurridas(ticket) {
-    if (!ticket.created_at) return 0;
-    let fechaFin;
-    if (ticket.estado === 'Facturado' && ticket.invoiced_at) {
-        fechaFin = new Date(ticket.invoiced_at);
-    } else if (ticket.estado === 'Completado' && ticket.completed_at) {
-        fechaFin = new Date(ticket.completed_at);
-    } else if (ticket.estado === 'Pendiente de facturar' && ticket.completed_at) {
-        fechaFin = new Date(ticket.completed_at);
-    } else {
-        fechaFin = new Date();
+    let totalMs = ticket.tiempo_acumulado_ms || 0;
+    // Si está "En curso", sumar el tiempo activo actual
+    if (ticket.estado === 'En curso' && ticket.en_curso_desde) {
+        totalMs += Date.now() - new Date(ticket.en_curso_desde).getTime();
     }
-    const ms = fechaFin - new Date(ticket.created_at);
-    return Math.max(0, Math.round(ms / 360000) / 10);
+    return Math.max(0, Math.round(totalMs / 360000) / 10);
 }
 
 module.exports = { registrarHistorial, calcularHorasTranscurridas };

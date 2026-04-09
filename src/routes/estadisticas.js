@@ -15,7 +15,7 @@ router.get('/resumen', authGuard, adminGuard, async (req, res) => {
 
     const now = new Date();
     const hace7dias = new Date(now - 7 * 86400000);
-    const abiertos = ['Pendiente', 'En curso'];
+    const abiertos = ['Pendiente', 'En curso', 'Pausado'];
 
     res.json({
         total:              data.length,
@@ -92,7 +92,7 @@ router.get('/operarios', authGuard, adminGuard, async (req, res) => {
     todos?.forEach(ticket => {
         ticket.ticket_asignaciones?.forEach(a => {
             if (!map[a.user_id]) return;
-            if (['Pendiente', 'En curso'].includes(ticket.estado)) map[a.user_id].tickets_pendientes++;
+            if (['Pendiente', 'En curso', 'Pausado'].includes(ticket.estado)) map[a.user_id].tickets_pendientes++;
         });
     });
 
