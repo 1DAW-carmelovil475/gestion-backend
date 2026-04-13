@@ -10,42 +10,89 @@ const { enviarEmailEventoAsignado, enviarEmailRecordatorio } = require('../helpe
 
 router.use(authGuard);
 
-// ── Helper: enriquecer eventos con nombres de creador/asignado ───────────
+// ── Helper: enriquecer eventos (perfiles, asignaciones, empresa, tickets, dispositivos) ──
 async function enriquecerEventos(eventos) {
     if (!eventos?.length) return eventos;
 
-    // Recoger todos los IDs únicos
-    const ids = new Set();
-    eventos.forEach(e => {
-        if (e.creado_por) ids.add(e.creado_por);
-        if (e.asignado_a) ids.add(e.asignado_a);
-    });
+    const eventoIds = eventos.map(e => e.id).filter(Boolean);
+    const userIds   = new Set();
+    eventos.forEach(e => { if (e.creado_por) userIds.add(e.creado_por); });
 
-    if (ids.size === 0) return eventos;
+    // ── 1. Asignaciones de operarios ─────────────────────────────
+    let asignMap = {};
+    if (eventoIds.length) {
+        const { data: asignaciones } = await supabase
+            .from('calendario_evento_asignaciones')
+            .select('evento_id, user_id')
+            .in('evento_id', eventoIds);
+        (asignaciones || []).forEach(a => {
+            if (!asignMap[a.evento_id]) asignMap[a.evento_id] = [];
+            asignMap[a.evento_id].push(a.user_id);
+            userIds.add(a.user_id);
+        });
+    }
 
-    const { data: perfiles } = await supabase
-        .from('profiles')
-        .select('id, nombre')
-        .in('id', [...ids]);
+    // ── 2. Perfiles de usuarios ──────────────────────────────────
+    const perfMap = {};
+    if (userIds.size > 0) {
+        const { data: perfiles } = await supabase
+            .from('profiles').select('id, nombre').in('id', [...userIds]);
+        (perfiles || []).forEach(p => { perfMap[p.id] = p.nombre; });
+    }
 
-    const map = {};
-    (perfiles || []).forEach(p => { map[p.id] = p.nombre; });
+    // ── 3. Empresas ──────────────────────────────────────────────
+    const empresaIds = [...new Set(eventos.filter(e => e.empresa_id).map(e => e.empresa_id))];
+    const empresaMap = {};
+    if (empresaIds.length) {
+        const { data: emps } = await supabase
+            .from('empresas').select('id, nombre').in('id', empresaIds);
+        (emps || []).forEach(emp => { empresaMap[emp.id] = emp; });
+    }
+
+    // ── 4. Tickets vinculados ────────────────────────────────────
+    let ticketsMap = {};
+    if (eventoIds.length) {
+        const { data: evTickets } = await supabase
+            .from('calendario_evento_tickets')
+            .select('evento_id, tickets_v2(id, numero, asunto, estado, prioridad)')
+            .in('evento_id', eventoIds);
+        (evTickets || []).forEach(r => {
+            if (!ticketsMap[r.evento_id]) ticketsMap[r.evento_id] = [];
+            if (r.tickets_v2) ticketsMap[r.evento_id].push(r.tickets_v2);
+        });
+    }
+
+    // ── 5. Dispositivos vinculados ───────────────────────────────
+    let disposMap = {};
+    if (eventoIds.length) {
+        const { data: evDispos } = await supabase
+            .from('calendario_evento_dispositivos')
+            .select('evento_id, dispositivos(id, nombre, categoria, ip)')
+            .in('evento_id', eventoIds);
+        (evDispos || []).forEach(r => {
+            if (!disposMap[r.evento_id]) disposMap[r.evento_id] = [];
+            if (r.dispositivos) disposMap[r.evento_id].push(r.dispositivos);
+        });
+    }
 
     return eventos.map(e => ({
         ...e,
-        creador: e.creado_por ? { nombre: map[e.creado_por] || null } : null,
-        asignado: e.asignado_a ? { nombre: map[e.asignado_a] || null } : null,
+        creador:                 e.creado_por ? { nombre: perfMap[e.creado_por] || null } : null,
+        asignados:               (asignMap[e.id] || []).map(uid => ({ id: uid, nombre: perfMap[uid] || null })),
+        empresa:                 e.empresa_id ? (empresaMap[e.empresa_id] || null) : null,
+        tickets_vinculados:      ticketsMap[e.id]  || [],
+        dispositivos_vinculados: disposMap[e.id]   || [],
     }));
 }
 
-// ── GET /  — Listar eventos del usuario (propios + asignados) ────────────
+// ── GET /  — Listar todos los eventos (vista compartida para todos) ───────
 router.get('/', async (req, res) => {
     try {
         const { desde, hasta } = req.query;
+
         let query = supabase
             .from('calendario_eventos')
             .select('*, calendario_avisos(*)')
-            .or(`creado_por.eq.${req.user.id},asignado_a.eq.${req.user.id}`)
             .order('fecha_inicio', { ascending: true });
 
         if (desde) query = query.gte('fecha_inicio', desde);
@@ -82,17 +129,17 @@ router.get('/todos', adminGuard, async (req, res) => {
 // ── POST / — Crear evento ────────────────────────────────────────────────
 router.post('/', async (req, res) => {
     try {
-        const { titulo, descripcion, fecha_inicio, fecha_fin, todo_el_dia, color, tipo, asignado_a, avisos } = req.body;
+        const { titulo, descripcion, fecha_inicio, fecha_fin, todo_el_dia, color, tipo, asignados, avisos, empresa_id, ticket_ids, dispositivo_ids } = req.body;
 
         if (!titulo || !fecha_inicio || !fecha_fin) {
             return res.status(400).json({ error: 'Título, fecha inicio y fecha fin son obligatorios.' });
         }
 
         // Solo gestores/admin pueden asignar a otros
-        if (asignado_a && asignado_a !== req.user.id) {
-            if (!['admin', 'gestor'].includes(req.user.rol)) {
-                return res.status(403).json({ error: 'Solo gestores pueden asignar eventos a otros usuarios.' });
-            }
+        const asignadosIds = Array.isArray(asignados) ? asignados : [];
+        const asignaOtros = asignadosIds.some(id => id !== req.user.id);
+        if (asignaOtros && !['admin', 'gestor'].includes(req.user.rol)) {
+            return res.status(403).json({ error: 'Solo gestores pueden asignar eventos a otros usuarios.' });
         }
 
         const { data: evento, error } = await supabase
@@ -106,12 +153,30 @@ router.post('/', async (req, res) => {
                 color: color || '#0047b3',
                 tipo: tipo || 'evento',
                 creado_por: req.user.id,
-                asignado_a: asignado_a || null,
+                empresa_id: empresa_id || null,
             })
             .select()
             .single();
 
         if (error) throw error;
+
+        // Crear asignaciones múltiples
+        if (asignadosIds.length) {
+            await supabase.from('calendario_evento_asignaciones')
+                .insert(asignadosIds.map(uid => ({ evento_id: evento.id, user_id: uid })));
+        }
+
+        // Vincular tickets
+        if (Array.isArray(ticket_ids) && ticket_ids.length) {
+            await supabase.from('calendario_evento_tickets')
+                .insert(ticket_ids.map(tid => ({ evento_id: evento.id, ticket_id: tid })));
+        }
+
+        // Vincular dispositivos
+        if (Array.isArray(dispositivo_ids) && dispositivo_ids.length) {
+            await supabase.from('calendario_evento_dispositivos')
+                .insert(dispositivo_ids.map(did => ({ evento_id: evento.id, dispositivo_id: did })));
+        }
 
         // Crear avisos si se proporcionan
         if (avisos?.length) {
@@ -132,13 +197,14 @@ router.post('/', async (req, res) => {
         // Enriquecer con nombres
         const [enriquecido] = await enriquecerEventos([evento]);
 
-        // Enviar email si se asigna a alguien
-        if (asignado_a && asignado_a !== req.user.id) {
+        // Enviar email a cada operario asignado (que no sea el propio creador)
+        const nuevosParaEmail = asignadosIds.filter(id => id !== req.user.id);
+        if (nuevosParaEmail.length) {
             try {
-                const perfiles = await getPerfilesConEmail([asignado_a]);
-                if (perfiles.length) {
+                const perfiles = await getPerfilesConEmail(nuevosParaEmail);
+                for (const perfil of perfiles) {
                     await enviarEmailEventoAsignado({
-                        destinatario: perfiles[0],
+                        destinatario: perfil,
                         evento: enriquecido,
                         asignadoPor: req.user.nombre || req.user.email,
                     });
@@ -158,22 +224,29 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const { titulo, descripcion, fecha_inicio, fecha_fin, todo_el_dia, color, tipo, asignado_a, completada, avisos } = req.body;
+        const { titulo, descripcion, fecha_inicio, fecha_fin, todo_el_dia, color, tipo, asignados, completada, avisos, empresa_id, ticket_ids, dispositivo_ids } = req.body;
 
         // Verificar que el evento pertenece al usuario o es gestor
         const { data: existing } = await supabase
             .from('calendario_eventos')
-            .select('creado_por, asignado_a')
+            .select('creado_por')
             .eq('id', id)
             .single();
 
         if (!existing) return res.status(404).json({ error: 'Evento no encontrado.' });
 
         const esCreador = existing.creado_por === req.user.id;
-        const esAsignado = existing.asignado_a === req.user.id;
         const esGestor = ['admin', 'gestor'].includes(req.user.rol);
 
-        if (!esCreador && !esAsignado && !esGestor) {
+        // Verificar si el usuario está asignado a este evento
+        const { data: asignacionPropia } = await supabase
+            .from('calendario_evento_asignaciones')
+            .select('user_id')
+            .eq('evento_id', id)
+            .eq('user_id', req.user.id)
+            .maybeSingle();
+
+        if (!esCreador && !asignacionPropia && !esGestor) {
             return res.status(403).json({ error: 'No tienes permiso para editar este evento.' });
         }
 
@@ -187,7 +260,7 @@ router.put('/:id', async (req, res) => {
             if (todo_el_dia !== undefined) updateData.todo_el_dia = todo_el_dia;
             if (color !== undefined) updateData.color = color;
             if (tipo !== undefined) updateData.tipo = tipo;
-            if (asignado_a !== undefined) updateData.asignado_a = asignado_a;
+            if (empresa_id !== undefined) updateData.empresa_id = empresa_id || null;
         }
         if (completada !== undefined) updateData.completada = completada;
         updateData.updated_at = new Date().toISOString();
@@ -200,6 +273,62 @@ router.put('/:id', async (req, res) => {
             .single();
 
         if (error) throw error;
+
+        // Actualizar asignaciones si se proporcionan (solo creador/gestor)
+        if (asignados !== undefined && (esCreador || esGestor)) {
+            const asignadosIds = Array.isArray(asignados) ? asignados : [];
+
+            // Cargar asignaciones previas para calcular nuevos
+            const { data: prevAsign } = await supabase
+                .from('calendario_evento_asignaciones')
+                .select('user_id')
+                .eq('evento_id', id);
+
+            const prevIds = (prevAsign || []).map(a => a.user_id);
+            const nuevosIds = asignadosIds.filter(uid => !prevIds.includes(uid));
+
+            // Reemplazar todas las asignaciones
+            await supabase.from('calendario_evento_asignaciones').delete().eq('evento_id', id);
+            if (asignadosIds.length) {
+                await supabase.from('calendario_evento_asignaciones')
+                    .insert(asignadosIds.map(uid => ({ evento_id: id, user_id: uid })));
+            }
+
+            // Enviar email a nuevos asignados (que no sean el editor)
+            const paraEmail = nuevosIds.filter(uid => uid !== req.user.id);
+            if (paraEmail.length) {
+                try {
+                    const perfiles = await getPerfilesConEmail(paraEmail);
+                    for (const perfil of perfiles) {
+                        await enviarEmailEventoAsignado({
+                            destinatario: perfil,
+                            evento,
+                            asignadoPor: req.user.nombre || req.user.email,
+                        });
+                    }
+                } catch (emailErr) {
+                    console.error('[Calendario] Error enviando email de asignación:', emailErr.message);
+                }
+            }
+        }
+
+        // Actualizar tickets vinculados
+        if (ticket_ids !== undefined && (esCreador || esGestor)) {
+            await supabase.from('calendario_evento_tickets').delete().eq('evento_id', id);
+            if (Array.isArray(ticket_ids) && ticket_ids.length) {
+                await supabase.from('calendario_evento_tickets')
+                    .insert(ticket_ids.map(tid => ({ evento_id: id, ticket_id: tid })));
+            }
+        }
+
+        // Actualizar dispositivos vinculados
+        if (dispositivo_ids !== undefined && (esCreador || esGestor)) {
+            await supabase.from('calendario_evento_dispositivos').delete().eq('evento_id', id);
+            if (Array.isArray(dispositivo_ids) && dispositivo_ids.length) {
+                await supabase.from('calendario_evento_dispositivos')
+                    .insert(dispositivo_ids.map(did => ({ evento_id: id, dispositivo_id: did })));
+            }
+        }
 
         // Actualizar avisos si se proporcionan
         if (avisos !== undefined) {
@@ -221,23 +350,6 @@ router.put('/:id', async (req, res) => {
 
         // Enriquecer con nombres
         const [enriquecido] = await enriquecerEventos([evento]);
-
-        // Si se acaba de asignar a alguien nuevo, enviar email
-        if (asignado_a && asignado_a !== existing.asignado_a && asignado_a !== req.user.id) {
-            try {
-                const perfiles = await getPerfilesConEmail([asignado_a]);
-                if (perfiles.length) {
-                    await enviarEmailEventoAsignado({
-                        destinatario: perfiles[0],
-                        evento: enriquecido,
-                        asignadoPor: req.user.nombre || req.user.email,
-                    });
-                }
-            } catch (emailErr) {
-                console.error('[Calendario] Error enviando email de asignación:', emailErr.message);
-            }
-        }
-
         res.json(enriquecido);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -272,13 +384,11 @@ router.delete('/:id', async (req, res) => {
     }
 });
 
-// ── POST /check-reminders — Comprobar y enviar recordatorios pendientes ──
-// Este endpoint se puede llamar desde un cron job externo cada 5 minutos
-router.post('/check-reminders', async (req, res) => {
+// ── Lógica de recordatorios (usada por el cron interno y por el endpoint) ──
+async function checkReminders() {
     try {
         const ahora = new Date();
 
-        // Buscar avisos no enviados
         const { data: avisos, error } = await supabase
             .from('calendario_avisos')
             .select('*, calendario_eventos(*)')
@@ -295,13 +405,21 @@ router.post('/check-reminders', async (req, res) => {
             const fechaAviso = new Date(fechaEvento.getTime() - aviso.minutos_antes * 60000);
 
             if (ahora >= fechaAviso) {
-                // Determinar a quién enviar el recordatorio
-                const destinatarioId = evento.asignado_a || evento.creado_por;
                 try {
-                    const perfiles = await getPerfilesConEmail([destinatarioId]);
-                    if (perfiles.length) {
+                    // Enviar a todos los asignados; si no hay, al creador
+                    const { data: asignaciones } = await supabase
+                        .from('calendario_evento_asignaciones')
+                        .select('user_id')
+                        .eq('evento_id', evento.id);
+
+                    const destinatarioIds = asignaciones?.length
+                        ? asignaciones.map(a => a.user_id)
+                        : [evento.creado_por];
+
+                    const perfiles = await getPerfilesConEmail(destinatarioIds);
+                    for (const perfil of perfiles) {
                         await enviarEmailRecordatorio({
-                            destinatario: perfiles[0],
+                            destinatario: perfil,
                             evento,
                             minutosAntes: aviso.minutos_antes,
                         });
@@ -319,10 +437,23 @@ router.post('/check-reminders', async (req, res) => {
             }
         }
 
-        res.json({ ok: true, enviados });
+        return enviados;
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error('[Calendario] Error en checkReminders:', err.message);
+        return 0;
     }
+}
+
+// Cron interno: comprobar recordatorios cada 5 minutos
+setTimeout(() => {
+    checkReminders();
+    setInterval(checkReminders, 5 * 60 * 1000);
+}, 30 * 1000); // esperar 30s al arranque para que todo esté listo
+
+// ── POST /check-reminders — Endpoint manual (útil para tests/cron externo) ──
+router.post('/check-reminders', async (req, res) => {
+    const enviados = await checkReminders();
+    res.json({ ok: true, enviados });
 });
 
 module.exports = router;
