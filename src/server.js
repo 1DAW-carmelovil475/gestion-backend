@@ -38,6 +38,7 @@ app.use('/api/v2/operarios',            require('./routes/operarios'));
 app.use('/api/v2/tickets',              require('./routes/ticketsV2'));
 app.use('/api/v2/estadisticas',         require('./routes/estadisticas'));
 app.use('/api/v2/chat',                 require('./routes/chat'));
+app.use('/api/v2/calendario',           require('./routes/calendario'));
 app.use('/api/v2',                      require('./routes/recursos'));        // archivos, horas, comentarios sueltos
 
 // ── CATCH-ALL ─────────────────────────────────────────────────────────────────
