@@ -13,7 +13,7 @@ router.get('/', authGuard, async (req, res) => {
     res.json(data);
 });
 
-const CATEGORIAS_VALIDAS = ['equipo', 'servidor', 'nas', 'red', 'correo', 'otro', 'web'];
+const CATEGORIAS_VALIDAS = ['equipo', 'servidor', 'nas', 'red', 'correo', 'otro', 'web', 'impresora'];
 
 function sanitizeDisp(str, max = 300) {
     if (!str) return null;
