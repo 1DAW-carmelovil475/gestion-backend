@@ -23,6 +23,9 @@ router.post('/', authGuard, async (req, res) => {
         email:     sanitize(req.body.email, 200),
         telefono:  sanitize(req.body.telefono, 30),
         direccion: sanitize(req.body.direccion, 300),
+        poblacion: sanitize(req.body.poblacion, 150),
+        provincia: sanitize(req.body.provincia, 100),
+        cp:        sanitize(req.body.cp, 10),
         notas:     sanitize(req.body.notas, 2000),
         servicios: Array.isArray(req.body.servicios) ? req.body.servicios : [],
         contactos: Array.isArray(req.body.contactos) ? req.body.contactos : [],
@@ -95,7 +98,7 @@ router.put('/:id', authGuard, async (req, res) => {
     }
 
     // Only allow known safe fields — strip empresa_matriz_nombre and any injected columns
-    const allowed = ['nombre', 'cif', 'email', 'telefono', 'direccion', 'notas', 'servicios', 'contactos', 'estado', 'empresa_matriz_id'];
+    const allowed = ['nombre', 'cif', 'email', 'telefono', 'direccion', 'poblacion', 'provincia', 'cp', 'notas', 'servicios', 'contactos', 'estado', 'empresa_matriz_id'];
     const safe = {};
     for (const key of allowed) {
         if (req.body[key] !== undefined) {
